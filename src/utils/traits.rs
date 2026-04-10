@@ -1,15 +1,15 @@
-#[cfg(feature = "gui")]
+
 /// fltk `choice` needs escaping the `pipe` character when showing strings
 /// so add this trait for escaping the `|` in &str
 pub(crate) trait FwSlashPipeEscape {
-    #[cfg(feature = "gui")]
+    
     fn fw_slash_pipe_escape(self) -> String;
     #[allow(dead_code)]
     fn fw_slash_pipe_unescape(self) -> String;
 }
-#[cfg(feature = "gui")]
+
 impl FwSlashPipeEscape for &str {
-    #[cfg(feature = "gui")]
+    
     fn fw_slash_pipe_escape(self) -> String {
         let mut result = String::with_capacity(self.len() + 8);
         for ch in self.chars() {
@@ -65,7 +65,7 @@ impl SanitizeArg for &str {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[cfg(feature = "gui")]
+    
     fn test_escape() {
         use crate::utils::traits::*;
         let a = "a/b/c|d".to_string();

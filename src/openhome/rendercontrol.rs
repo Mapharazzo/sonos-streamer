@@ -11,7 +11,7 @@ use crate::{
 };
 use bitflags::bitflags;
 use figura::{Context, Template, Value};
-#[cfg(feature = "gui")]
+
 use fltk::{button::LightButton, valuator::HorNiceSlider};
 use hashbrown::HashMap;
 use log::{debug, error, info};
@@ -326,7 +326,7 @@ impl SupportedProtocols {
     }
 }
 
-#[cfg(feature = "gui")]
+
 #[derive(Debug, Clone, Default)]
 /// The UI elements associated with a renderer
 pub struct RendUI {
@@ -354,7 +354,7 @@ pub struct Renderer {
     pub location: String,
     pub services: Vec<AvService>,
     pub playing: bool,
-    #[cfg(feature = "gui")]
+    
     pub rend_ui: RendUI,
     host: String,
     port: u16,
@@ -379,7 +379,7 @@ impl Renderer {
             location: String::new(),
             services: Vec::with_capacity(8),
             playing: false,
-            #[cfg(feature = "gui")]
+            
             rend_ui: RendUI::default(),
             host: String::new(),
             port: 0,

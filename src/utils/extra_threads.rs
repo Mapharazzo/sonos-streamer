@@ -52,7 +52,7 @@ pub fn run_rms_monitor(
     mut rms_frame_r: Progress,
 ) {
     const F32_TO_I16: f32 = (i16::MAX as f32) + 1.0;
-    // compute # of samples needed to get a 10 Hz refresh rate
+    // compute of samples needed to get a 10 Hz refresh rate
     let samples_per_update = ((wd.sample_rate * u32::from(wd.channels)) / 10) as usize;
     let mut total_samples = 0usize;
     let mut ch_sum = f32x4::splat(0f32);

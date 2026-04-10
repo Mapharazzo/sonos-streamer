@@ -26,7 +26,7 @@ pub fn ui_log(cat: LogCategory, s: &str) {
         LogCategory::Error => error!("tb_log: {s}"),
         LogCategory::Info => info!("tb_log: {s}"),
     };
-    #[cfg(feature = "gui")]
+    
     {
         use crate::enums::messages::MessageType;
         use crate::globals::statics::get_msgchannel;
