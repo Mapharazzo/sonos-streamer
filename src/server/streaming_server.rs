@@ -49,6 +49,21 @@ pub fn run_server(
             wd.sample_rate, stream_config.bits_per_sample, stream_config.streaming_format,
         ),
     );
+    
+    // SIDE-CHANNEL INJECTION: We spawn a thread to listen for latency pulse triggers.
+    // In a full implementation, this would read from a global AtomicBool or crossbeam channel
+    // and instruct the wave_reader to inject the Barker sequence.
+    let latency_trigger_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _trigger_clone = latency_trigger_active.clone();
+    std::thread::spawn(move || {
+        // Pseudo-listener: in the real app, we'll expose an HTTP endpoint or hotkey to trigger this
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            // trigger_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            // ui_log(LogCategory::Info, "Latency pulse triggered for next audio frame.");
+        }
+    });
+
     let server = Arc::new(Server::http(addr).unwrap_or_else(|e| {
         ui_log(
             LogCategory::Error,
@@ -226,9 +241,7 @@ fn streaming_request(
     }
     let nclients = {
         let mut clients = get_clients_mut();
-        if let Some(chs) = clients.remove(&streaming_ctx.remote_addr) {
-            chs.stop_flac_encoder();
-        };
+        clients.remove(&streaming_ctx.remote_addr);
         clients.len()
     };
     debug!("Now have {nclients} streaming clients left");
@@ -340,8 +353,7 @@ fn get_dlna_headers(streaming_ctx: &StreamingContext) -> Vec<Header> {
     let mut headers = get_std_headers();
     // get the dlna format string
     let ct_text = match streaming_ctx.streaming_format {
-        StreamingFormat::Flac => "audio/flac".to_string(),
-        StreamingFormat::Wav | StreamingFormat::Rf64 => "audio/vnd.wave;codec=1".to_string(),
+                StreamingFormat::Wav | StreamingFormat::Rf64 => "audio/vnd.wave;codec=1".to_string(),
         StreamingFormat::Lpcm => match streaming_ctx.bits_per_sample {
             BitDepth::Bits16 => {
                 format!("audio/L16;rate={};channels=2", streaming_ctx.sample_rate)

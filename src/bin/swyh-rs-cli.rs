@@ -1,5 +1,4 @@
 #![cfg(feature = "cli")]
-use mimalloc::MiMalloc;
 use std::{
     fs::File,
     net::IpAddr,
@@ -12,8 +11,6 @@ use std::{
     time::Duration,
 };
 
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 use cpal::traits::StreamTrait;
 use crossbeam_channel::{Sender, unbounded};
 use hashbrown::HashMap;
@@ -23,7 +20,7 @@ use swyh_rs::{
     enums::{
         messages::MessageType,
         streaming::{
-            StreamingFormat::{Flac, Lpcm, Rf64, Wav},
+            StreamingFormat::{Lpcm, Rf64, Wav},
             StreamingState,
         },
     },
@@ -115,6 +112,9 @@ fn main() -> Result<(), i32> {
         ),
         WriteLogger::new(loglevel, log_config.clone(), File::create(logfile).unwrap()),
     ]);
+
+    // START LATENCY LISTENER (The Microphone)
+    swyh_rs::listener::start_latency_listener();
 
     info!(
         "{} V {}(build: {}) - Running on {}, {}, {} - Logging started.",
@@ -361,7 +361,6 @@ fn main() -> Result<(), i32> {
             match sf {
                 Lpcm => config.lpcm_stream_size = args.stream_size,
                 Wav => config.wav_stream_size = args.stream_size,
-                Flac => config.flac_stream_size = args.stream_size,
                 Rf64 => config.rf64_stream_size = args.stream_size,
             }
         }

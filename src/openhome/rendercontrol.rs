@@ -285,7 +285,7 @@ impl StreamInfo {
         StreamInfo {
             sample_rate,
             bits_per_sample: BitDepth::from(config.bits_per_sample.unwrap_or(16)),
-            streaming_format: config.streaming_format.unwrap_or(StreamingFormat::Flac),
+            streaming_format: config.streaming_format.unwrap_or(StreamingFormat::Lpcm),
             server_port: config.server_port.unwrap_or(SERVER_PORT),
         }
     }
@@ -494,16 +494,6 @@ impl Renderer {
         fmt_vars.insert("sample_rate", Value::Int(streaminfo.sample_rate.into()));
         fmt_vars.insert("duration", Value::static_str("00:00:00"));
         let didl_tmpl = TEMPLATES.with(|t| match streaminfo.streaming_format {
-            StreamingFormat::Flac => t
-                .flac_prot
-                .get()
-                .expect("templates not initialized")
-                .format(&fmt_vars),
-            StreamingFormat::Rf64 | StreamingFormat::Wav => t
-                .wav_prot
-                .get()
-                .expect("templates not initialized")
-                .format(&fmt_vars),
             StreamingFormat::Lpcm => match streaminfo.bits_per_sample {
                 BitDepth::Bits16 => t
                     .l16_prot
@@ -516,6 +506,11 @@ impl Renderer {
                     .expect("templates not initialized")
                     .format(&fmt_vars),
             },
+            StreamingFormat::Rf64 | StreamingFormat::Wav => t
+                .wav_prot
+                .get()
+                .expect("templates not initialized")
+                .format(&fmt_vars),
         });
         let didl_prot = match didl_tmpl {
             Ok(s) => s,

@@ -33,8 +33,6 @@ use std::{
     time::Duration,
 };
 
-use super::flacstream::FlacChannel;
-
 /// Shared audio sample buffer passed between capture and streaming threads.
 pub type AudioSamples = Arc<Vec<f32>>;
 
@@ -48,14 +46,12 @@ pub struct ChannelStream {
     pub remote_ip: EcoString,
     pub streaming_format: StreamingFormat,
     fifo: VecDeque<f32>,
-    flac_fifo: VecDeque<u8>,
     silence: Vec<f32>,
     capture_timeout: Duration,
     sending_silence: bool,
     wav_hdr: Vec<u8>,
     use_wave_format: bool,
     bits_per_sample: u16,
-    flac_channel: Option<FlacChannel>,
 }
 
 impl ChannelStream {
@@ -68,22 +64,11 @@ impl ChannelStream {
         bits_per_sample: u16,
         streaming_format: StreamingFormat,
     ) -> ChannelStream {
-        let flac_channel = if streaming_format == StreamingFormat::Flac {
-            Some(FlacChannel::new(
-                rx.clone(),
-                sample_rate,
-                u32::from(bits_per_sample),
-                2,
-            ))
-        } else {
-            None
-        };
         let capture_timeout = u64::from(get_config().capture_timeout.unwrap_or(5));
-        let chs = ChannelStream {
+        ChannelStream {
             s: tx,
             r: rx,
             fifo: VecDeque::with_capacity(16384),
-            flac_fifo: VecDeque::with_capacity(16384),
             silence: get_silence_buffer(sample_rate, capture_timeout / 4),
             capture_timeout: Duration::from_millis(capture_timeout), // silence kicks in after CAPTURE_TIMEOUT seconds
             sending_silence: false,
@@ -98,25 +83,6 @@ impl ChannelStream {
             use_wave_format,
             bits_per_sample,
             streaming_format,
-            flac_channel,
-        };
-        if chs.streaming_format == StreamingFormat::Flac {
-            chs.start_flac_encoder();
-        }
-        chs
-    }
-
-    /// start the flac encoder in a seperate thread
-    fn start_flac_encoder(&self) {
-        if let Some(flac_channel) = &self.flac_channel {
-            flac_channel.run();
-        }
-    }
-
-    /// stop the flac encoder thread
-    pub fn stop_flac_encoder(&self) {
-        if let Some(flac_channel) = &self.flac_channel {
-            flac_channel.stop();
         }
     }
 
@@ -139,49 +105,44 @@ impl ChannelStream {
     fn get_samples(&mut self) {
         let time_out = self.capture_timeout;
         if let Ok(chunk) = self.r.recv_timeout(time_out) {
-            self.fifo
-                .append(&mut VecDeque::from(chunk.as_ref().clone()));
+            let mut samples = chunk.as_ref().clone();
+
+            // SIDE-CHANNEL INJECTION LOGIC:
+            // This is the core of the latency trick. We look for a global trigger.
+            // When fired, we overwrite a tiny slice of the buffer with the Barker sequence.
+            if std::fs::metadata("trigger_pulse.txt").is_ok() {
+                // Remove the trigger file so it only fires once per request
+                let _ = std::fs::remove_file("trigger_pulse.txt");
+                log::info!("LATENCY PULSE: Injecting Barker sequence into audio buffer!");
+
+                let barker_mono = crate::latency::barker_mono();
+                let mut pulse = Vec::with_capacity(barker_mono.len() * 2);
+
+                // Interleave for stereo output (Left / Right)
+                for bit in barker_mono.iter() {
+                    pulse.push(*bit); // Left
+                    pulse.push(*bit); // Right
+                }
+
+                // Overwrite the start of the current audio chunk with our pulse
+                let len_to_overwrite = std::cmp::min(pulse.len(), samples.len());
+                for i in 0..len_to_overwrite {
+                    samples[i] = pulse[i];
+                }
+
+                // Start the stopwatch!
+                crate::latency::PULSE_INJECTED_AT.store(
+                    crate::latency::now_ms(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+            }
+
+            self.fifo.append(&mut VecDeque::from(samples));
             self.sending_silence = false;
         } else {
             self.fifo.append(&mut VecDeque::from(self.silence.clone()));
             self.sending_silence = true;
         }
-    }
-
-    /// fill the HTTP read buffer with encoded flac data from the FlacChannel
-    /// the f32 samples have already been encoded to FLAC and written to the
-    /// `flac_out` channel of the `FlacChannel` encoder thread.
-    /// the `flac_in` channel of the `FlacChannel` is read here and pushed on the
-    /// `flac_fifo` `VecDeque` for transmission  
-    fn fill_flac_buffer(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        debug_assert!(self.flac_channel.is_some());
-        let flac_in = self.flac_channel.as_ref().unwrap().flac_in.clone();
-        // make sure we have enough data for this read buffer
-        while self.flac_fifo.len() < buf.len() {
-            if let Ok(chunk) = flac_in.recv() {
-                self.flac_fifo.append(&mut VecDeque::from(chunk));
-            } else {
-                return Err(Error::other("FLAC channel receive error."));
-            }
-        }
-        // fill the buffer with the number of FLAC bytes needed from the fifo
-        let (s1, s2) = self.flac_fifo.as_slices();
-        let (l1, l2) = {
-            if s1.len() >= buf.len() {
-                (buf.len(), 0)
-            } else {
-                (s1.len(), buf.len() - s1.len())
-            }
-        };
-        debug_assert!(l1 + l2 == buf.len());
-        buf[..l1].copy_from_slice(&s1[..l1]);
-        if l2 > 0 {
-            buf[l1..].copy_from_slice(&s2[..l2]);
-        }
-        // remove the copied bytes from the fifo
-        // use drain() hack until truncate_front() is stabilized
-        self.flac_fifo.drain(0..buf.len());
-        Ok(buf.len())
     }
 
     /// Fill the HTTP read buffer with LPCM/WAV/RF64 data from the f32 samples `VecDeque` fifo.
@@ -192,7 +153,6 @@ impl ChannelStream {
     fn fill_lpcm_buffer(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         /// the f32 samples are converted in chunks of 4 f32 values (SSE2 f32x4)
         const CHUNK_SIZE: usize = 4;
-        debug_assert!(self.flac_channel.is_none());
         if self.use_wave_format && !self.wav_hdr.is_empty() {
             let i = self.wav_hdr.len();
             debug_assert!(
@@ -244,11 +204,7 @@ impl ChannelStream {
 /// filling the read buffer with FLAC or LPCM/WAV/RF64 data
 impl Read for ChannelStream {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
-        if self.flac_channel.is_some() {
-            self.fill_flac_buffer(buf)
-        } else {
-            self.fill_lpcm_buffer(buf)
-        }
+        self.fill_lpcm_buffer(buf)
     }
 }
 

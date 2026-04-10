@@ -168,7 +168,7 @@ Recognized options:
                                 self.streaming_format = Some(StreamingFormat::Lpcm);
                             }
                             "FLAC" => {
-                                self.streaming_format = Some(StreamingFormat::Flac);
+                                self.streaming_format = Some(StreamingFormat::Lpcm);
                             }
                             x => errors.push(format!("Invalid streaming_format {x}.")),
                         }
