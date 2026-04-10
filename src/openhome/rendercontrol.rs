@@ -12,7 +12,6 @@ use crate::{
 use bitflags::bitflags;
 use figura::{Context, Template, Value};
 
-use fltk::{button::LightButton, valuator::HorNiceSlider};
 use hashbrown::HashMap;
 use log::{debug, error, info};
 use std::{
@@ -330,8 +329,7 @@ impl SupportedProtocols {
 #[derive(Debug, Clone, Default)]
 /// The UI elements associated with a renderer
 pub struct RendUI {
-    pub slider: Option<HorNiceSlider>,
-    pub button: Option<LightButton>,
+    // GUI elements removed
 }
 
 /// Renderer struct describers a media renderer,

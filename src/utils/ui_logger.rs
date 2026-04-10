@@ -26,15 +26,4 @@ pub fn ui_log(cat: LogCategory, s: &str) {
         LogCategory::Error => error!("tb_log: {s}"),
         LogCategory::Info => info!("tb_log: {s}"),
     };
-    
-    {
-        use crate::enums::messages::MessageType;
-        use crate::globals::statics::get_msgchannel;
-        use fltk::app;
-        get_msgchannel()
-            .0
-            .send(MessageType::LogMessage(cat.to_string() + s))
-            .unwrap();
-        app::awake();
-    }
 }
