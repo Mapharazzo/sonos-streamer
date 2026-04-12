@@ -80,6 +80,31 @@ pub fn cpal_device_display_name(device: &cpal::Device) -> String {
     get_device_name(device).unwrap_or_else(|_| "Unknown/unnamed".into())
 }
 
+/// Rich label for setup wizards: `DeviceDescription` (name, manufacturer, type, interface) plus
+/// driver, hardware address, and any backend-specific extended lines when present.
+#[must_use]
+pub fn cpal_device_detail_label(device: &cpal::Device) -> String {
+    match device.description() {
+        Ok(desc) => {
+            let mut s = desc.to_string();
+            if let Some(d) = desc.driver() {
+                s.push_str(" | driver: ");
+                s.push_str(d);
+            }
+            if let Some(a) = desc.address() {
+                s.push_str(" | address: ");
+                s.push_str(a);
+            }
+            for line in desc.extended() {
+                s.push_str(" | ");
+                s.push_str(line);
+            }
+            s
+        }
+        Err(e) => format!("(device metadata unavailable: {e})"),
+    }
+}
+
 impl Device {
     /// Construct a [`Device`] from a [`cpal::Device`].
     ///
@@ -114,6 +139,12 @@ impl Device {
     #[must_use]
     pub fn name(&self) -> &str {
         self.name.as_str()
+    }
+
+    /// Long device line for menus (see [`cpal_device_detail_label`]).
+    #[must_use]
+    pub fn detail_label(&self) -> String {
+        cpal_device_detail_label(self.as_ref())
     }
 
     /// Default stream config

@@ -20,9 +20,24 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
     if nets.is_empty() {
         return Err("No IPv4 network interfaces found.".into());
     }
+    let ifaces_opt = if_addrs::get_if_addrs().ok();
+    let net_labels: Vec<String> = nets
+        .iter()
+        .map(|ip| {
+            ifaces_opt
+                .as_ref()
+                .and_then(|ifaces| {
+                    ifaces
+                        .iter()
+                        .find(|iface| iface.addr.ip().to_string() == *ip)
+                })
+                .map(|iface| format!("{} — {} ({:?})", iface.name, ip, iface.addr))
+                .unwrap_or_else(|| ip.clone())
+        })
+        .collect();
     let net_idx = Select::with_theme(&theme)
         .with_prompt("Network interface for SSDP + stream URL")
-        .items(&nets)
+        .items(&net_labels)
         .default(0)
         .interact()
         .map_err(|e| e.to_string())?;
@@ -42,7 +57,12 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
     }
     let labels: Vec<String> = renderers
         .iter()
-        .map(|r| format!("{} — {}", r.dev_name, r.remote_addr))
+        .map(|r| {
+            format!(
+                "{} @ {} — model: {} — type: {} — {}",
+                r.dev_name, r.remote_addr, r.dev_model, r.dev_type, r.location
+            )
+        })
         .collect();
     let ridx = Select::with_theme(&theme)
         .with_prompt("Speaker / renderer")
@@ -58,10 +78,10 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
     if outs.is_empty() {
         return Err("No audio output devices to capture.".into());
     }
-    let onames: Vec<String> = outs.iter().map(|d| d.name().to_string()).collect();
+    let olabels: Vec<String> = outs.iter().map(|d| d.detail_label()).collect();
     let mut def_o = 0usize;
-    for (i, n) in onames.iter().enumerate() {
-        let u = n.to_uppercase();
+    for (i, d) in outs.iter().enumerate() {
+        let u = d.name().to_uppercase();
         if u.contains("CABLE") || u.contains("VB-AUDIO") {
             def_o = i;
             break;
@@ -69,7 +89,7 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
     }
     let oidx = Select::with_theme(&theme)
         .with_prompt("Loopback capture device (e.g. VB-Cable Output)")
-        .items(&onames)
+        .items(&olabels)
         .default(def_o)
         .interact()
         .map_err(|e| e.to_string())?;
@@ -81,10 +101,10 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
         c.input_device = None;
         println!("No input devices enumerated; latency listener will use the OS default input.");
     } else {
-        let inames: Vec<String> = ins.iter().map(|d| d.name().to_string()).collect();
+        let ilabels: Vec<String> = ins.iter().map(|d| d.detail_label()).collect();
         let iidx = Select::with_theme(&theme)
             .with_prompt("Input device for latency detection (mic / line-in)")
-            .items(&inames)
+            .items(&ilabels)
             .default(0)
             .interact()
             .map_err(|e| e.to_string())?;
