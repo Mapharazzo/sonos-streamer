@@ -302,42 +302,8 @@ fn main() -> Result<(), i32> {
     // raise process priority a bit to prevent audio stuttering under cpu load
     raise_priority();
 
-    // the rms monitor channel
+    // the rms monitor channel (loopback capture starts later, right before renderer play)
     let rms_channel = unbounded();
-
-    // capture system audio
-    debug!("Try capturing system audio");
-    let rms_chan1 = rms_channel.clone();
-    let mut stream: cpal::Stream = match capture_output_audio(&audio_output_device, rms_chan1.0) {
-        Some(s) => s,
-        _ => {
-            ui_log(
-                LogCategory::Error,
-                "Could not capture audio ...Please check configuration.",
-            );
-            return Err(-2);
-        }
-    };
-    stream.play().expect("Unable to play audio stream");
-
-    // If silence injector is on, create a silence injector stream.
-    // it has to be kept alive, it only seems unused
-    let _silence_stream = {
-        if let Some(true) = config.inject_silence {
-            if let Some(stream) = run_silence_injector(&audio_output_device) {
-                ui_log(
-                    LogCategory::Info,
-                    "Injecting silence into the output stream",
-                );
-                Some(stream)
-            } else {
-                ui_log(LogCategory::Error, "E Unable to inject silence !!");
-                None
-            }
-        } else {
-            None
-        }
-    };
 
     // set args ssdp_interval, minimum is 0.5 minutes
     if let Some(mut minutes) = args.ssdp_interval_mins {
@@ -529,6 +495,43 @@ fn main() -> Result<(), i32> {
         ui_log(LogCategory::Info, "dry-run - exiting...");
         return Ok(());
     }
+
+    // Loopback capture starts here (after SSDP / HTTP server / dry-run), not alongside the
+    // latency mic listener during idle startup. Latency calibration does not call stop_play or
+    // tear down clients; deferring capture avoids WASAPI edge cases from loopback + mic open
+    // together before Sonos pulls the stream.
+    debug!("Try capturing system audio");
+    let rms_chan1 = rms_channel.clone();
+    let mut stream: cpal::Stream = match capture_output_audio(&audio_output_device, rms_chan1.0) {
+        Some(s) => s,
+        _ => {
+            ui_log(
+                LogCategory::Error,
+                "Could not capture audio ...Please check configuration.",
+            );
+            return Err(-2);
+        }
+    };
+    stream.play().expect("Unable to play audio stream");
+
+    // If silence injector is on, create a silence injector stream.
+    // it has to be kept alive, it only seems unused
+    let _silence_stream = {
+        if let Some(true) = config.inject_silence {
+            if let Some(stream) = run_silence_injector(&audio_output_device) {
+                ui_log(
+                    LogCategory::Info,
+                    "Injecting silence into the output stream",
+                );
+                Some(stream)
+            } else {
+                ui_log(LogCategory::Error, "E Unable to inject silence !!");
+                None
+            }
+        } else {
+            None
+        }
+    };
 
     // prepare for playing
     let streaminfo = StreamInfo::new(wd.sample_rate);

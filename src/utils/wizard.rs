@@ -10,7 +10,10 @@ use crate::openhome::rendercontrol::{Renderer, discover};
 use crate::utils::audiodevices::{get_input_audio_devices, get_output_audio_devices};
 use crate::utils::configuration::Configuration;
 use crate::utils::local_ip_address::get_interfaces;
-use crate::{enums::streaming::StreamingFormat, globals::statics::get_config};
+use crate::{
+    enums::streaming::{StreamSize, StreamingFormat},
+    globals::statics::get_config,
+};
 
 /// Run interactive prompts and return an updated configuration (also written to disk).
 pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, String> {
@@ -134,6 +137,10 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
         1 => StreamingFormat::Lpcm,
         _ => StreamingFormat::Rf64,
     });
+    if matches!(c.streaming_format, Some(StreamingFormat::Wav)) {
+        // Open-ended WAV over HTTP: chunked transfer; U32maxNotChunked breaks many DLNA clients (e.g. Sonos Era).
+        c.wav_stream_size = Some(StreamSize::U32maxChunked);
+    }
 
     let cal = Confirm::with_theme(&theme)
         .with_prompt("Run startup latency calibration?")
