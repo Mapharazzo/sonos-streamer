@@ -33,7 +33,10 @@ impl CfgDefaults {
         Some(StreamSize::U64maxNotChunked)
     }
     fn wav_stream_size() -> Option<StreamSize> {
-        Some(StreamSize::U32maxNotChunked)
+        // U32maxNotChunked sets tiny_http chunked_threshold to u32::MAX so Identity + huge
+        // Content-Length is used; Sonos Era (and other DLNA clients) often drop that after ~10–30s.
+        // Chunked WAV keeps Transfer-Encoding: chunked (entity length >= threshold) and stays stable.
+        Some(StreamSize::U32maxChunked)
     }
     fn bits_per_sample() -> Option<u16> {
         Some(16)
@@ -140,7 +143,7 @@ impl Configuration {
             auto_reconnect: false,
             _disable_chunked: true,
             lpcm_stream_size: Some(StreamSize::U64maxNotChunked),
-            wav_stream_size: Some(StreamSize::U32maxNotChunked),
+            wav_stream_size: Some(StreamSize::U32maxChunked),
             rf64_stream_size: Some(StreamSize::U64maxNotChunked),
             _flac_stream_size_legacy: None,
             _use_wave_format: false,
