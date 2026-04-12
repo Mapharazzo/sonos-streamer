@@ -455,18 +455,27 @@ fn capture_err_fn(err: cpal::StreamError) {
     }
 }
 
-/// helper functions for generic and specialized wave reader
-fn capture_started() {
-    ui_log(LogCategory::Info, "Audio capture is now receiving samples.");
+/// Log once the loopback CPAL stream is **running** (after `Stream::play`).
+/// WASAPI may not call the data callback until non-idle audio; do not tie this to the first buffer.
+pub fn log_loopback_capture_stream_started() {
+    ui_log(
+        LogCategory::Info,
+        "Loopback capture stream is active. Route your app's Windows playback output to the same \
+         device you selected for capture (VB-Cable: usually CABLE Input), or Sonos will hear silence.",
+    );
     if let Some(ref src) = get_config().sound_source {
         if src.to_uppercase().contains("CABLE") {
             ui_log(
                 LogCategory::Info,
-                "VB-Cable / loopback: set your music app output to this same Windows playback device, \
-                 or Sonos will stream silence until you do.",
+                "VB-Cable hint: the capture device is open now; set your music player output to \
+                 that same playback endpoint so loopback has a signal.",
             );
         }
     }
+}
+
+/// First audio callback only: enable RMS fan-out when requested.
+fn on_first_capture_callback() {
     if get_config().monitor_rms {
         RUN_RMS_MONITOR.store(true, Ordering::Relaxed);
     }
@@ -493,7 +502,7 @@ fn wave_reader<T>(samples: &[T], f32_samples: &mut Vec<f32>, rms_sender: &Sender
 where
     T: Sample + ToSample<f32>,
 {
-    ONFIRSTCALL.call_once(capture_started);
+    ONFIRSTCALL.call_once(on_first_capture_callback);
     f32_samples.clear();
     f32_samples.extend(samples.iter().map(|x: &T| T::to_sample::<f32>(*x)));
     distribute_samples(f32_samples, rms_sender);
@@ -502,6 +511,6 @@ where
 /// Specialized version of the generic `wave_reader` above for the "default" f32 case with Alsa/WasApi/PipeWire/Pulse.
 /// It bypasses the samples conversion iterator.
 fn wave_reader_f32(samples: &[f32], rms_sender: &Sender<AudioSamples>) {
-    ONFIRSTCALL.call_once(capture_started);
+    ONFIRSTCALL.call_once(on_first_capture_callback);
     distribute_samples(samples, rms_sender);
 }

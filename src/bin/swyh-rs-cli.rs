@@ -34,6 +34,7 @@ use swyh_rs::{
     utils::{
         audiodevices::{
             capture_output_audio, get_default_audio_output_device, get_output_audio_devices,
+            log_loopback_capture_stream_started,
         },
         bincommon::run_silence_injector,
         commandline::Args,
@@ -513,6 +514,7 @@ fn main() -> Result<(), i32> {
         }
     };
     stream.play().expect("Unable to play audio stream");
+    log_loopback_capture_stream_started();
 
     // If silence injector is on, create a silence injector stream.
     // it has to be kept alive, it only seems unused

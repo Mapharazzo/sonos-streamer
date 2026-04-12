@@ -253,6 +253,20 @@ impl Configuration {
             config.configuration.auto_calibrate = Some(true);
             force_update = true;
         }
+        // Sonos / many DLNA renderers drop Identity + u32::MAX Content-Length (U32maxNotChunked).
+        if matches!(
+            (
+                config.configuration.streaming_format,
+                config.configuration.wav_stream_size,
+            ),
+            (
+                Some(StreamingFormat::Wav),
+                Some(StreamSize::U32maxNotChunked)
+            )
+        ) {
+            config.configuration.wav_stream_size = Some(StreamSize::U32maxChunked);
+            force_update = true;
+        }
         if !config.configuration.read_only {
             let meta = fs::metadata(configfile);
             if let Ok(meta) = meta {
