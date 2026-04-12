@@ -5,6 +5,7 @@
 ///
 ///
 use crate::{
+    debug_agent::agent_log,
     enums::streaming::{BitDepth, StreamingFormat},
     globals::statics::{APP_VERSION, SERVER_PORT, get_config},
     utils::ui_logger::{LogCategory, ui_log},
@@ -664,6 +665,14 @@ impl Renderer {
 
     /// `stop_play` - stop playing on this renderer (`OpenHome` or `AvTransport`)
     pub fn stop_play(&mut self) {
+        // #region agent log
+        agent_log(
+            "H3",
+            "rendercontrol.rs:stop_play",
+            "stop_play_invoked",
+            &format!("{{\"remote_addr\":\"{}\"}}", self.remote_addr),
+        );
+        // #endregion
         if self
             .supported_protocols
             .contains(SupportedProtocols::OPENHOME)

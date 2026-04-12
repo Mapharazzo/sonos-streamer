@@ -1,4 +1,5 @@
 use crate::{
+    debug_agent::agent_log,
     enums::{
         messages::MessageType,
         streaming::{BitDepth, StreamingContext, StreamingFormat, StreamingState},
@@ -256,6 +257,22 @@ fn streaming_request(
     #[cfg(debug_assertions)]
     dump_resp_headers(&response);
     let e = request.respond(response);
+    // #region agent log
+    match &e {
+        Ok(()) => agent_log(
+            "H1",
+            "streaming_server.rs:respond",
+            "respond_ok",
+            r#"{"status":"ok"}"#,
+        ),
+        Err(err) => agent_log(
+            "H1",
+            "streaming_server.rs:respond",
+            "respond_err",
+            &format!(r#"{{"kind":"{:?}"}}"#, err.kind()),
+        ),
+    }
+    // #endregion
     if e.is_err() {
         ui_log(
             LogCategory::Error,

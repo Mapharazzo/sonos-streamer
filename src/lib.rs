@@ -1,4 +1,5 @@
 pub mod autocalibrate;
+pub mod debug_agent;
 pub mod enums;
 pub mod globals;
 pub mod latency;

@@ -31,8 +31,12 @@ use std::{
     collections::VecDeque,
     io::{Error, Read, Result as IoResult},
     sync::Arc,
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
+
+static FILL_LPCM_READ_CALLS: AtomicU64 = AtomicU64::new(0);
+static FILL_LPCM_READ_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// Shared audio sample buffer passed between capture and streaming threads.
 pub type AudioSamples = Arc<Vec<f32>>;
@@ -180,7 +184,33 @@ impl ChannelStream {
         // make sure we have enough samples ready to fill the read buffer
         let bytes_per_sample = (self.bits_per_sample / 8) as usize;
         let buf_chunksize = bytes_per_sample * 4;
+        if buf.is_empty() {
+            // #region agent log
+            crate::debug_agent::agent_log(
+                "H2",
+                "rwstream.rs:fill_lpcm_buffer",
+                "empty_read_buf_eof",
+                "{}",
+            );
+            // #endregion
+            return Ok(0);
+        }
         let chunks_needed = buf.len() / buf_chunksize;
+        if chunks_needed == 0 {
+            // #region agent log
+            crate::debug_agent::agent_log(
+                "H2",
+                "rwstream.rs:fill_lpcm_buffer",
+                "partial_buf_chunks_zero_eof",
+                &format!(
+                    "{{\"buf_len\":{},\"buf_chunksize\":{}}}",
+                    buf.len(),
+                    buf_chunksize
+                ),
+            );
+            // #endregion
+            return Ok(0);
+        }
         let samples_needed: usize = chunks_needed * 4;
         while self.fifo.len() < samples_needed {
             self.get_samples();
@@ -210,7 +240,22 @@ impl ChannelStream {
                 i32_to_i24be(&f32_chunk_to_i32(bd, sample_chunk), chunk);
             }),
         }
-        Ok(chunks_needed * buf_chunksize)
+        let n = chunks_needed * buf_chunksize;
+        // #region agent log
+        let calls = FILL_LPCM_READ_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+        let bytes = FILL_LPCM_READ_BYTES.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+        if calls <= 3 || calls % 500 == 0 {
+            crate::debug_agent::agent_log(
+                "H4",
+                "rwstream.rs:fill_lpcm_buffer",
+                "pcm_read_progress",
+                &format!(
+                    "{{\"calls\":{calls},\"returned_bytes\":{n},\"cumulative_bytes\":{bytes}}}"
+                ),
+            );
+        }
+        // #endregion
+        Ok(n)
     }
 }
 
