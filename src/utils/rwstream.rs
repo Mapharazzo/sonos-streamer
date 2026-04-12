@@ -74,37 +74,12 @@ fn apply_latency_pulse_if_triggered(samples: &mut Vec<f32>) -> bool {
     true
 }
 
-/// Some DLNA renderers (notably Sonos) drop long-lived HTTP streams that are **perfect** digital
-/// silence for many seconds — common with WASAPI loopback before any app outputs to the device.
-/// Add imperceptible triangular dither in normalized float (~±1) so PCM is not all-zero.
-///
-/// WASAPI often delivers buffers with tiny non-zero float noise (peak ~1e-6); a naive `peak <
-/// 1e-8` check never dithered those, so Sonos still saw "digital silence" and closed ~15s later.
-fn maybe_dither_digital_silence(bits_per_sample: u16, samples: &mut [f32]) {
+/// Triangular sub-LSB dither in normalized float (~±1). Caller decides when to apply.
+fn apply_sub_lsb_dither(bits_per_sample: u16, samples: &mut [f32]) {
     if samples.is_empty() {
         return;
     }
-    let peak = samples.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
-    let sum_sq: f64 = samples.iter().map(|x| f64::from(*x) * f64::from(*x)).sum();
-    let rms = (sum_sq / samples.len() as f64).sqrt() as f32;
-    // Idle loopback: max(peak, rms) below ~-60 dBFS — dither so Sonos does not see a flat bitstream.
-    const QUIET_GATE: f32 = 1.0e-3;
-    if peak.max(rms) > QUIET_GATE {
-        return;
-    }
-    // #region agent log
-    let n = DITHER_APPLY_COUNT.fetch_add(1, Ordering::Relaxed);
-    if n % 400 == 0 {
-        crate::debug_agent::agent_log(
-            "H12",
-            "rwstream.rs:maybe_dither",
-            "dither_quiet_buffer",
-            &format!(r#"{{"n":{n},"peak":{peak},"rms":{rms}}}"#),
-        );
-    }
-    // #endregion
     let scale = 2_f32.powi(i32::from(bits_per_sample.clamp(1, 32)));
-    // ~1 LSB peak-to-peak after i16 quantize
     let amp = (1.0 / scale) * 1.0;
     for (i, s) in samples.iter_mut().enumerate() {
         let tri = match i % 4 {
@@ -115,6 +90,46 @@ fn maybe_dither_digital_silence(bits_per_sample: u16, samples: &mut [f32]) {
         };
         *s = tri * amp;
     }
+}
+
+fn peak_rms(samples: &[f32]) -> (f32, f32) {
+    if samples.is_empty() {
+        return (0.0, 0.0);
+    }
+    let peak = samples.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+    let sum_sq: f64 = samples.iter().map(|x| f64::from(*x) * f64::from(*x)).sum();
+    let rms = (sum_sq / samples.len() as f64).sqrt() as f32;
+    (peak, rms)
+}
+
+// #region agent log
+fn agent_log_dither(tag: &str, peak: f32, rms: f32) {
+    let n = DITHER_APPLY_COUNT.fetch_add(1, Ordering::Relaxed);
+    if n % 60 == 0 {
+        let tag_esc = tag.replace('\\', "\\\\").replace('"', "\\\"");
+        crate::debug_agent::agent_log(
+            "H12",
+            "rwstream.rs:dither",
+            "dither_applied",
+            &format!(
+                r#"{{"n":{n},"tag":"{tag_esc}","peak":{peak},"rms":{rms}}}"#
+            ),
+        );
+    }
+}
+// #endregion
+
+/// WASAPI loopback "idle" buffers are often **not** mathematically zero (noise + denorms) but still
+/// far below audibility; a strict 1e-3 gate skipped dither on almost every chunk (runtime: one
+/// H12 then Sonos still dropped). Use ~-34 dBFS as "quiet enough to dither for DLNA keepalive".
+fn maybe_dither_quiet_capture(bits_per_sample: u16, samples: &mut [f32]) {
+    let (peak, rms) = peak_rms(samples);
+    const QUIET_GATE: f32 = 0.02;
+    if peak.max(rms) > QUIET_GATE {
+        return;
+    }
+    agent_log_dither("capture_ok", peak, rms);
+    apply_sub_lsb_dither(bits_per_sample, samples);
 }
 
 /// Channelstream - used to transport the f32 samples from the `wave_reader`
@@ -189,7 +204,7 @@ impl ChannelStream {
             Ok(chunk) => {
                 let mut samples = chunk.as_ref().clone();
                 if !apply_latency_pulse_if_triggered(&mut samples) {
-                    maybe_dither_digital_silence(self.bits_per_sample, &mut samples);
+                    maybe_dither_quiet_capture(self.bits_per_sample, &mut samples);
                 }
                 self.fifo.append(&mut VecDeque::from(samples));
                 self.sending_silence = false;
@@ -202,7 +217,9 @@ impl ChannelStream {
                     self.fifo.append(&mut VecDeque::from(samples));
                     self.sending_silence = false;
                 } else {
-                    maybe_dither_digital_silence(self.bits_per_sample, &mut samples);
+                    // Synthetic zeros: always dither (no gate) so HTTP never carries a long flat run.
+                    agent_log_dither("recv_timeout_silence", 0.0, 0.0);
+                    apply_sub_lsb_dither(self.bits_per_sample, &mut samples);
                     self.fifo.append(&mut VecDeque::from(samples));
                     self.sending_silence = true;
                 }
