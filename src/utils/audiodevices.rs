@@ -458,6 +458,15 @@ fn capture_err_fn(err: cpal::StreamError) {
 /// helper functions for generic and specialized wave reader
 fn capture_started() {
     ui_log(LogCategory::Info, "Audio capture is now receiving samples.");
+    if let Some(ref src) = get_config().sound_source {
+        if src.to_uppercase().contains("CABLE") {
+            ui_log(
+                LogCategory::Info,
+                "VB-Cable / loopback: set your music app output to this same Windows playback device, \
+                 or Sonos will stream silence until you do.",
+            );
+        }
+    }
     if get_config().monitor_rms {
         RUN_RMS_MONITOR.store(true, Ordering::Relaxed);
     }

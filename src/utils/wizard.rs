@@ -74,6 +74,17 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
     c.last_renderer = Some(chosen.remote_addr.clone());
     c.active_renderers = vec![chosen.remote_addr.clone()];
 
+    println!();
+    println!("Loopback capture uses Windows *playback* devices. Your player must output to the");
+    println!("same device you pick here, or Sonos will only hear silence.");
+    println!(
+        "VB-Audio Cable: usually choose \"CABLE Input\" and set your app's output to that device;"
+    );
+    println!(
+        "or try \"CABLE Output\" in this list if you route audio through the cable differently."
+    );
+    println!();
+
     let outs = get_output_audio_devices();
     if outs.is_empty() {
         return Err("No audio output devices to capture.".into());

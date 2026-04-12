@@ -26,7 +26,7 @@ use ecow::EcoString;
 #[cfg(debug_assertions)]
 use fastrand::Rng;
 use itertools::Itertools;
-use log::debug;
+use log::{debug, info};
 use std::{
     collections::VecDeque,
     io::{Error, Read, Result as IoResult},
@@ -36,6 +36,38 @@ use std::{
 
 /// Shared audio sample buffer passed between capture and streaming threads.
 pub type AudioSamples = Arc<Vec<f32>>;
+
+/// If `trigger_pulse.txt` exists, overwrite the start of `samples` (stereo f32) with the Barker pulse
+/// and arm the latency stopwatch. Returns `true` if a trigger file was consumed.
+fn apply_latency_pulse_if_triggered(samples: &mut Vec<f32>) -> bool {
+    let trigger_path = pulse_trigger_path();
+    if std::fs::metadata(&trigger_path).is_err() {
+        return false;
+    }
+    let _ = std::fs::remove_file(&trigger_path);
+    info!("LATENCY PULSE: Injecting Barker sequence into audio buffer!");
+
+    let barker_mono = crate::latency::barker_mono();
+    let mut pulse = Vec::with_capacity(barker_mono.len() * 2);
+    for bit in barker_mono.iter() {
+        pulse.push(*bit);
+        pulse.push(*bit);
+    }
+
+    if samples.len() < pulse.len() {
+        samples.resize(pulse.len(), 0.0);
+    }
+    let len_to_overwrite = std::cmp::min(pulse.len(), samples.len());
+    for i in 0..len_to_overwrite {
+        samples[i] = pulse[i];
+    }
+
+    crate::latency::PULSE_INJECTED_AT.store(
+        crate::latency::now_ms(),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    true
+}
 
 /// Channelstream - used to transport the f32 samples from the `wave_reader`
 /// to the http output stream in LPCM/WAV/FLAC format
@@ -105,45 +137,25 @@ impl ChannelStream {
     /// (or with f32 silence if no samples are coming)
     fn get_samples(&mut self) {
         let time_out = self.capture_timeout;
-        if let Ok(chunk) = self.r.recv_timeout(time_out) {
-            let mut samples = chunk.as_ref().clone();
-
-            // SIDE-CHANNEL INJECTION LOGIC:
-            // This is the core of the latency trick. We look for a global trigger.
-            // When fired, we overwrite a tiny slice of the buffer with the Barker sequence.
-            let trigger_path = pulse_trigger_path();
-            if std::fs::metadata(&trigger_path).is_ok() {
-                // Remove the trigger file so it only fires once per request
-                let _ = std::fs::remove_file(&trigger_path);
-                log::info!("LATENCY PULSE: Injecting Barker sequence into audio buffer!");
-
-                let barker_mono = crate::latency::barker_mono();
-                let mut pulse = Vec::with_capacity(barker_mono.len() * 2);
-
-                // Interleave for stereo output (Left / Right)
-                for bit in barker_mono.iter() {
-                    pulse.push(*bit); // Left
-                    pulse.push(*bit); // Right
-                }
-
-                // Overwrite the start of the current audio chunk with our pulse
-                let len_to_overwrite = std::cmp::min(pulse.len(), samples.len());
-                for i in 0..len_to_overwrite {
-                    samples[i] = pulse[i];
-                }
-
-                // Start the stopwatch!
-                crate::latency::PULSE_INJECTED_AT.store(
-                    crate::latency::now_ms(),
-                    std::sync::atomic::Ordering::SeqCst,
-                );
+        match self.r.recv_timeout(time_out) {
+            Ok(chunk) => {
+                let mut samples = chunk.as_ref().clone();
+                let _ = apply_latency_pulse_if_triggered(&mut samples);
+                self.fifo.append(&mut VecDeque::from(samples));
+                self.sending_silence = false;
             }
-
-            self.fifo.append(&mut VecDeque::from(samples));
-            self.sending_silence = false;
-        } else {
-            self.fifo.append(&mut VecDeque::from(self.silence.clone()));
-            self.sending_silence = true;
+            Err(_) => {
+                // When capture has not produced a chunk yet (or stalls), we still must honour
+                // `trigger_pulse.txt` or latency calibration and HTTP `/latency/trigger` never fire.
+                let mut samples = self.silence.clone();
+                if apply_latency_pulse_if_triggered(&mut samples) {
+                    self.fifo.append(&mut VecDeque::from(samples));
+                    self.sending_silence = false;
+                } else {
+                    self.fifo.append(&mut VecDeque::from(self.silence.clone()));
+                    self.sending_silence = true;
+                }
+            }
         }
     }
 
