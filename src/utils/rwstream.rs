@@ -73,6 +73,27 @@ fn apply_latency_pulse_if_triggered(samples: &mut Vec<f32>) -> bool {
     true
 }
 
+/// Some DLNA renderers (notably Sonos) drop long-lived HTTP streams that are **perfect** digital
+/// silence for many seconds — common with WASAPI loopback before any app outputs to the device.
+/// Add imperceptible triangular dither in normalized float (~±1) so PCM is not all-zero.
+fn maybe_dither_digital_silence(bits_per_sample: u16, samples: &mut [f32]) {
+    let peak = samples.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+    if peak > 1.0e-8 {
+        return;
+    }
+    let scale = 2_f32.powi(i32::from(bits_per_sample.clamp(1, 32)));
+    let amp = (1.0 / scale) * 0.35;
+    for (i, s) in samples.iter_mut().enumerate() {
+        let tri = match i % 4 {
+            0 => -1.0f32,
+            1 => 1.0,
+            2 => 1.0,
+            _ => -1.0,
+        };
+        *s = tri * amp;
+    }
+}
+
 /// Channelstream - used to transport the f32 samples from the `wave_reader`
 /// to the http output stream in LPCM/WAV/FLAC format
 /// implements `Read` for the HTTP streaming
@@ -144,7 +165,9 @@ impl ChannelStream {
         match self.r.recv_timeout(time_out) {
             Ok(chunk) => {
                 let mut samples = chunk.as_ref().clone();
-                let _ = apply_latency_pulse_if_triggered(&mut samples);
+                if !apply_latency_pulse_if_triggered(&mut samples) {
+                    maybe_dither_digital_silence(self.bits_per_sample, &mut samples);
+                }
                 self.fifo.append(&mut VecDeque::from(samples));
                 self.sending_silence = false;
             }
@@ -156,7 +179,8 @@ impl ChannelStream {
                     self.fifo.append(&mut VecDeque::from(samples));
                     self.sending_silence = false;
                 } else {
-                    self.fifo.append(&mut VecDeque::from(self.silence.clone()));
+                    maybe_dither_digital_silence(self.bits_per_sample, &mut samples);
+                    self.fifo.append(&mut VecDeque::from(samples));
                     self.sending_silence = true;
                 }
             }
