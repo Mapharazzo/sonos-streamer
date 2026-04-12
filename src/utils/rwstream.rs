@@ -16,6 +16,7 @@ use crate::{
         StreamingFormat,
     },
     globals::statics::get_config,
+    latency::pulse_trigger_path,
     utils::samples_conv::{
         f32_chunk_to_i32, i32_to_i16be, i32_to_i16le, i32_to_i24be, i32_to_i24le,
     },
@@ -110,9 +111,10 @@ impl ChannelStream {
             // SIDE-CHANNEL INJECTION LOGIC:
             // This is the core of the latency trick. We look for a global trigger.
             // When fired, we overwrite a tiny slice of the buffer with the Barker sequence.
-            if std::fs::metadata("trigger_pulse.txt").is_ok() {
+            let trigger_path = pulse_trigger_path();
+            if std::fs::metadata(&trigger_path).is_ok() {
                 // Remove the trigger file so it only fires once per request
-                let _ = std::fs::remove_file("trigger_pulse.txt");
+                let _ = std::fs::remove_file(&trigger_path);
                 log::info!("LATENCY PULSE: Injecting Barker sequence into audio buffer!");
 
                 let barker_mono = crate::latency::barker_mono();

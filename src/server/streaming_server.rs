@@ -4,14 +4,16 @@ use crate::{
         streaming::{BitDepth, StreamingContext, StreamingFormat, StreamingState},
     },
     globals::statics::get_clients_mut,
+    latency::{arm_latency_response_waiter, pulse_trigger_path},
     openhome::rendercontrol::WavData,
     server::query_params::StreamingParams,
     utils::rwstream::ChannelStream,
     utils::ui_logger::{LogCategory, ui_log},
 };
-use crossbeam_channel::{Sender, unbounded};
+use crossbeam_channel::{Sender, bounded, unbounded};
 use ecow::EcoString;
 use log::debug;
+use std::io::Cursor;
 use std::{io, net::IpAddr, sync::Arc, thread, time::Duration};
 use tiny_http::{Header, Method, Response, Server};
 
@@ -24,7 +26,7 @@ pub struct StreamerFeedBack {
 
 /// `run_server` - run a tiny-http webserver to serve streaming requests from renderers
 ///
-/// all music is sent with the sample rate of the source in the requested audio format (lpcm/wav/rf64/flac)
+/// all music is sent with the sample rate of the source in the requested audio format (lpcm/wav/rf64)
 /// in the requested bit depth (16 or 24)
 /// the samples are read as f32 slices from a crossbeam channel fed by the `wave_reader`
 /// a `ChannelStream` is created for this purpose, and inserted in the array of active
@@ -38,7 +40,9 @@ pub fn run_server(
     let addr = format!("{local_addr}:{server_port}");
     ui_log(
         LogCategory::Info,
-        &format!("The streaming server is listening on http://{addr}/stream/swyh.wav"),
+        &format!(
+            "The streaming server is listening on http://{addr}/stream/swyh.wav (latency probe: http://{addr}/latency/trigger)"
+        ),
     );
     // get the needed config info upfront
     let stream_config = StreamingContext::from_config();
@@ -49,20 +53,6 @@ pub fn run_server(
             wd.sample_rate, stream_config.bits_per_sample, stream_config.streaming_format,
         ),
     );
-    
-    // SIDE-CHANNEL INJECTION: We spawn a thread to listen for latency pulse triggers.
-    // In a full implementation, this would read from a global AtomicBool or crossbeam channel
-    // and instruct the wave_reader to inject the Barker sequence.
-    let latency_trigger_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let _trigger_clone = latency_trigger_active.clone();
-    std::thread::spawn(move || {
-        // Pseudo-listener: in the real app, we'll expose an HTTP endpoint or hotkey to trigger this
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-            // trigger_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-            // ui_log(LogCategory::Info, "Latency pulse triggered for next audio frame.");
-        }
-    });
 
     let server = Arc::new(Server::http(addr).unwrap_or_else(|e| {
         ui_log(
@@ -89,6 +79,11 @@ pub fn run_server(
                     );
                     #[cfg(debug_assertions)]
                     dump_rq_headers(&rq);
+                    let url_path = rq.url().split('?').next().unwrap_or(rq.url()).to_string();
+                    if url_path == "/latency/trigger" && *rq.method() == Method::Get {
+                        latency_trigger_get(rq);
+                        return;
+                    }
                     // create fresh streaming context from config info for each new streaming request
                     // as some parameters may have changed
                     let mut streaming_ctx = StreamingContext::from_config();
@@ -130,6 +125,37 @@ pub fn run_server(
             );
             panic!("{e:?}");
         });
+    }
+}
+
+/// Manual latency probe: inject Barker pulse and return JSON `latency_ms` or timeout.
+fn latency_trigger_get(rq: tiny_http::Request) {
+    let (tx, rx) = bounded(1);
+    arm_latency_response_waiter(tx);
+    let path = pulse_trigger_path();
+    let _ = std::fs::write(&path, b"1");
+    let body = match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Some(ms)) => format!("{{\"latency_ms\":{ms}}}\n"),
+        Ok(None) => "{\"latency_ms\":null,\"error\":\"aborted\"}\n".to_string(),
+        Err(_) => "{\"latency_ms\":null,\"error\":\"timeout\"}\n".to_string(),
+    };
+    let mut headers = get_std_headers();
+    if let Ok(h) = Header::from_bytes(&b"Content-Type"[..], b"application/json") {
+        headers.push(h);
+    }
+    let len = body.len();
+    let resp = Response::new(
+        tiny_http::StatusCode(200),
+        headers,
+        Cursor::new(body.into_bytes()),
+        Some(len),
+        None,
+    );
+    if let Err(e) = rq.respond(resp) {
+        ui_log(
+            LogCategory::Error,
+            &format!("latency/trigger respond error: {e}"),
+        );
     }
 }
 
@@ -353,7 +379,7 @@ fn get_dlna_headers(streaming_ctx: &StreamingContext) -> Vec<Header> {
     let mut headers = get_std_headers();
     // get the dlna format string
     let ct_text = match streaming_ctx.streaming_format {
-                StreamingFormat::Wav | StreamingFormat::Rf64 => "audio/vnd.wave;codec=1".to_string(),
+        StreamingFormat::Wav | StreamingFormat::Rf64 => "audio/vnd.wave;codec=1".to_string(),
         StreamingFormat::Lpcm => match streaming_ctx.bits_per_sample {
             BitDepth::Bits16 => {
                 format!("audio/L16;rate={};channels=2", streaming_ctx.sample_rate)

@@ -59,8 +59,6 @@ static L16_PROT_INFO: &str = "http-get:*:audio/L16;rate={sample_rate};channels=2
 static L24_PROT_INFO: &str = "http-get:*:audio/L24;rate={sample_rate};channels=2:DLNA.ORG_PN=LPCM";
 static WAV_PROT_INFO: &str = "http-get:*:audio/wav:DLNA.ORG_PN=WAV;DLNA.ORG_OP=01;DLNA.ORG_CI=0;\
     DLNA.ORG_FLAGS=03700000000000000000000000000000";
-static FLAC_PROT_INFO: &str = "http-get:*:audio/flac:DLNA.ORG_PN=FLAC;DLNA.ORG_OP=01;DLNA.ORG_CI=0;\
-    DLNA.ORG_FLAGS=01700000000000000000000000000000";
 
 /// didl metadata template
 static DIDL_TEMPLATE: &str = "\
@@ -179,7 +177,6 @@ static BAD_TEMPL: &str = "Error parsing/formatting XML template.";
 /// Compiled (thread-local) figura templates.
 /// `CbTemplate` is `!Send` so these live per-thread.
 struct CompiledTemplates {
-    flac_prot: OnceCell<CbTemplate>,
     wav_prot: OnceCell<CbTemplate>,
     l16_prot: OnceCell<CbTemplate>,
     l24_prot: OnceCell<CbTemplate>,
@@ -191,7 +188,6 @@ struct CompiledTemplates {
 impl CompiledTemplates {
     const fn new() -> Self {
         Self {
-            flac_prot: OnceCell::new(),
             wav_prot: OnceCell::new(),
             l16_prot: OnceCell::new(),
             l24_prot: OnceCell::new(),
@@ -216,12 +212,6 @@ thread_local! {
 pub fn init_templates() {
     debug!("Compiling figura HTTP templates");
     TEMPLATES.with(|t| {
-        t.flac_prot
-            .set(
-                CbTemplate::compile(htmlescape::encode_minimal(FLAC_PROT_INFO))
-                    .expect("static FLAC prot info template is invalid"),
-            )
-            .expect("can not set compiled flac_prot");
         t.wav_prot
             .set(
                 CbTemplate::compile(htmlescape::encode_minimal(WAV_PROT_INFO))
@@ -325,7 +315,6 @@ impl SupportedProtocols {
     }
 }
 
-
 #[derive(Debug, Clone, Default)]
 /// The UI elements associated with a renderer
 pub struct RendUI {
@@ -352,7 +341,7 @@ pub struct Renderer {
     pub location: String,
     pub services: Vec<AvService>,
     pub playing: bool,
-    
+
     pub rend_ui: RendUI,
     host: String,
     port: u16,
@@ -377,7 +366,7 @@ impl Renderer {
             location: String::new(),
             services: Vec::with_capacity(8),
             playing: false,
-            
+
             rend_ui: RendUI::default(),
             host: String::new(),
             port: 0,

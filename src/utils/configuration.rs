@@ -35,9 +35,6 @@ impl CfgDefaults {
     fn wav_stream_size() -> Option<StreamSize> {
         Some(StreamSize::U32maxNotChunked)
     }
-    fn flac_stream_size() -> Option<StreamSize> {
-        Some(StreamSize::NoneChunked)
-    }
     fn bits_per_sample() -> Option<u16> {
         Some(16)
     }
@@ -79,8 +76,9 @@ pub struct Configuration {
     pub wav_stream_size: Option<StreamSize>,
     #[serde(alias = "RF64StreamSize", default = "CfgDefaults::stream_size")]
     pub rf64_stream_size: Option<StreamSize>,
-    #[serde(alias = "FLACStreamSize", default = "CfgDefaults::flac_stream_size")]
-    pub flac_stream_size: Option<StreamSize>,
+    /// Absorbs legacy `FLACStreamSize` from old config files (FLAC streaming removed).
+    #[serde(alias = "FLACStreamSize", default, skip_serializing)]
+    _flac_stream_size_legacy: Option<StreamSize>,
     // removed in 1.10.8 (obsolete)
     #[serde(alias = "UseWaveFormat", skip, default)]
     _use_wave_format: bool,
@@ -104,6 +102,15 @@ pub struct Configuration {
     pub hidden_renderers: Vec<String>,
     #[serde(alias = "LastNetwork", default)]
     pub last_network: Option<String>,
+    /// Substring match for CPAL input device used for latency detection (microphone).
+    #[serde(alias = "InputDevice", default)]
+    pub input_device: Option<String>,
+    /// Round-trip latency threshold (ms) for startup calibration.
+    #[serde(alias = "LatencyThresholdMSec", default)]
+    pub latency_threshold_ms: Option<u32>,
+    /// Run Barker pulse calibration after connecting to renderer(s).
+    #[serde(alias = "AutoCalibrate", default)]
+    pub auto_calibrate: Option<bool>,
     #[serde(alias = "ConfigDir", default)]
     config_dir: PathBuf,
     #[serde(alias = "ConfigId", default)]
@@ -135,7 +142,7 @@ impl Configuration {
             lpcm_stream_size: Some(StreamSize::U64maxNotChunked),
             wav_stream_size: Some(StreamSize::U32maxNotChunked),
             rf64_stream_size: Some(StreamSize::U64maxNotChunked),
-            flac_stream_size: Some(StreamSize::NoneChunked),
+            _flac_stream_size_legacy: None,
             _use_wave_format: false,
             bits_per_sample: Some(16),
             streaming_format: Some(StreamingFormat::Lpcm),
@@ -147,6 +154,9 @@ impl Configuration {
             active_renderers: Vec::new(),
             hidden_renderers: Vec::new(),
             last_network: None,
+            input_device: None,
+            latency_threshold_ms: Some(500),
+            auto_calibrate: Some(true),
             config_dir: Self::get_config_dir(),
             config_id: Some(Self::get_config_id()),
             read_only: false,
@@ -230,6 +240,14 @@ impl Configuration {
         }
         if config.configuration.sound_source_index.is_none() {
             config.configuration.sound_source_index = Some(0);
+            force_update = true;
+        }
+        if config.configuration.latency_threshold_ms.is_none() {
+            config.configuration.latency_threshold_ms = Some(500);
+            force_update = true;
+        }
+        if config.configuration.auto_calibrate.is_none() {
+            config.configuration.auto_calibrate = Some(true);
             force_update = true;
         }
         if !config.configuration.read_only {

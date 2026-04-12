@@ -7,7 +7,6 @@ use std::net::UdpSocket;
 
 /// `get_local_address` - get the local ip address, return an `Option<String>`. when it fails, return `None`.
 
-
 pub fn get_local_addr() -> Result<IpAddr, local_ip_address::Error> {
     local_ip()
 }

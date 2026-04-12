@@ -115,6 +115,21 @@ impl Device {
     pub fn default_config(&self) -> &SupportedStreamConfig {
         &self.stream_config
     }
+
+    /// Input-only wrapper (for microphones / line-in). Fails if the device has no input config.
+    pub fn from_input_device(device: cpal::Device) -> Result<Self, DefaultStreamConfigError> {
+        let name = get_device_name(&device).unwrap_or_else(|e| {
+            debug!("Unable to retrieve device name due to:\n\t{e}");
+            "Unknown/unnamed".into()
+        });
+        let conf = device.default_input_config()?;
+        debug!("    Default input stream config:\n      {conf:?}");
+        Ok(Self {
+            kind: DeviceKind::Input(device),
+            name,
+            stream_config: conf,
+        })
+    }
 }
 
 impl AsRef<cpal::Device> for Device {
@@ -223,6 +238,58 @@ pub fn get_output_audio_devices() -> Vec<Device> {
     }
 
     result
+}
+
+/// Enumerate devices that expose a valid default **input** configuration.
+#[must_use]
+pub fn get_input_audio_devices() -> Vec<Device> {
+    let mut result = Vec::new();
+    for host_id in cpal::available_hosts() {
+        let host = match cpal::host_from_id(host_id) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
+        let input_devs = match host.input_devices() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        for device in input_devs {
+            if let Ok(device) = Device::from_input_device(device) {
+                result.push(device);
+            }
+        }
+    }
+    result
+}
+
+/// Pick a raw CPAL input device: optional case-insensitive substring match, else OS default.
+#[must_use]
+pub fn pick_input_cpal_device(name_substr: Option<&str>) -> Option<cpal::Device> {
+    use log::warn;
+    let host = cpal::default_host();
+    if let Some(q) = name_substr.filter(|s| !s.is_empty()) {
+        if let Ok(devs) = host.input_devices() {
+            for dev in devs {
+                let ok = dev
+                    .name()
+                    .map(|n| n.to_uppercase().contains(&q.to_uppercase()))
+                    .unwrap_or(false);
+                if ok {
+                    return Some(dev);
+                }
+            }
+        }
+        warn!("Input device matching '{q}' not found; using default input device.");
+    }
+    host.default_input_device()
+}
+
+#[must_use]
+pub fn get_default_audio_input_device() -> Option<Device> {
+    let default_host = cpal::default_host();
+    default_host
+        .default_input_device()
+        .and_then(|device| Device::from_input_device(device).ok())
 }
 
 #[must_use]

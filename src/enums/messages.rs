@@ -6,4 +6,6 @@ pub enum MessageType {
     PlayerMessage(StreamerFeedBack),
     LogMessage(String),
     CaptureAborted,
+    /// Round-trip latency in milliseconds (Barker pulse detected on input).
+    LatencyResult(u64),
 }

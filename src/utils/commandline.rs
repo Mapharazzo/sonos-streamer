@@ -5,7 +5,7 @@ use lexopt::{
     Arg::{Long, Short},
     Parser, ValueExt,
 };
-use log::LevelFilter;
+use log::{LevelFilter, warn};
 
 use crate::{enums::streaming::*, utils::traits::SanitizeArg};
 
@@ -30,6 +30,10 @@ pub struct Args {
     pub serve_only: Option<bool>,
     pub volume: Option<u8>,
     pub upfront_buffer: Option<u32>,
+    pub wizard: Option<bool>,
+    pub mic_input_name: Option<String>,
+    pub latency_threshold_ms: Option<u32>,
+    pub no_calibrate: Option<bool>,
 }
 
 impl Args {
@@ -57,6 +61,10 @@ Recognized options:
     -x (--serve_only) bool: only run the music server, no ssdp discovery [false]
     -v (--volume) u8 : desired player volume between 0 and 100 [unchanged]
     -u (--upfront_buffer) u32 : initial buffering in milliseconds [0]
+    -w (--wizard) : interactive setup (network, renderer, audio devices)
+    -m (--mic) string : input device name substring for latency listener [default input]
+    -L (--latency_threshold) u32 : max acceptable round-trip latency (ms) for auto-calibration [500]
+    --no_calibrate : skip startup latency calibration
 "#
         );
         println!("{self:?}");
@@ -168,6 +176,7 @@ Recognized options:
                                 self.streaming_format = Some(StreamingFormat::Lpcm);
                             }
                             "FLAC" => {
+                                warn!("FLAC streaming is not supported in this fork; using LPCM.");
                                 self.streaming_format = Some(StreamingFormat::Lpcm);
                             }
                             x => errors.push(format!("Invalid streaming_format {x}.")),
@@ -244,6 +253,26 @@ Recognized options:
                             Err(x) => errors.push(format!("Invalid upfront buffer msec: {x}.")),
                         }
                     }
+                }
+                Short('w') | Long("wizard") => {
+                    self.wizard = Some(true);
+                }
+                Short('m') | Long("mic") => {
+                    if let Ok(v) = argparser.value() {
+                        self.mic_input_name = Some(v.string().unwrap_or_default());
+                    }
+                }
+                Short('L') | Long("latency_threshold") => {
+                    if let Ok(v) = argparser.value() {
+                        match v.parse::<u32>() {
+                            Ok(n) if n > 0 => self.latency_threshold_ms = Some(n),
+                            Ok(_) => errors.push("latency_threshold must be > 0.".to_string()),
+                            Err(x) => errors.push(format!("Invalid latency threshold: {x}.")),
+                        }
+                    }
+                }
+                Long("no_calibrate") => {
+                    self.no_calibrate = Some(true);
                 }
                 _ => (),
             }

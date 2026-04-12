@@ -19,7 +19,7 @@ pub enum StreamingState {
 pub enum StreamingFormat {
     Lpcm,
     Wav,
-        Rf64,
+    Rf64,
 }
 
 impl fmt::Display for StreamingFormat {
@@ -27,7 +27,7 @@ impl fmt::Display for StreamingFormat {
         match self {
             StreamingFormat::Lpcm => f.write_str("lpcm"),
             StreamingFormat::Wav => f.write_str("wav"),
-                        StreamingFormat::Rf64 => f.write_str("rf64"),
+            StreamingFormat::Rf64 => f.write_str("rf64"),
         }
     }
 }
@@ -39,7 +39,7 @@ impl FromStr for StreamingFormat {
         match s.to_ascii_lowercase().as_str() {
             "lpcm" | "raw" => Ok(StreamingFormat::Lpcm),
             "wav" => Ok(StreamingFormat::Wav),
-                        "rf64" => Ok(StreamingFormat::Rf64),
+            "rf64" => Ok(StreamingFormat::Rf64),
             _ => Err(()),
         }
     }
@@ -51,7 +51,7 @@ impl StreamingFormat {
     }
     pub fn dlna_string(self, bps: BitDepth) -> String {
         match self {
-                        StreamingFormat::Wav | StreamingFormat::Rf64 => "audio/wave;codec=1 (WAV)".to_string(),
+            StreamingFormat::Wav | StreamingFormat::Rf64 => "audio/wave;codec=1 (WAV)".to_string(),
             StreamingFormat::Lpcm => {
                 if bps == BitDepth::Bits16 {
                     "audio/L16 (LPCM)".to_string()
@@ -186,7 +186,6 @@ pub struct StreamingContext {
     pub streaming_format: StreamingFormat,
     pub lpcm_streamsize: StreamSize,
     pub wav_streamsize: StreamSize,
-    pub flac_streamsize: StreamSize,
     pub rf64_streamsize: StreamSize,
     pub buffering_delay_msec: u32,
     pub remote_addr: EcoString, // ip:port
@@ -207,7 +206,6 @@ impl StreamingContext {
             streaming_format: cfg.streaming_format.unwrap_or(StreamingFormat::Lpcm),
             lpcm_streamsize: cfg.lpcm_stream_size.unwrap(),
             wav_streamsize: cfg.wav_stream_size.unwrap(),
-            flac_streamsize: cfg.flac_stream_size.unwrap(),
             rf64_streamsize: cfg.rf64_stream_size.unwrap(),
             buffering_delay_msec: cfg.buffering_delay_msec.unwrap_or(0),
             remote_addr: EcoString::new(),
@@ -246,7 +244,7 @@ impl StreamingContext {
             StreamingFormat::Lpcm => self.lpcm_streamsize.values(),
             StreamingFormat::Wav => self.wav_streamsize.values(),
             StreamingFormat::Rf64 => self.rf64_streamsize.values(),
-                    };
+        };
         // unless overridden in query params
         if let Some(ss) = query_params.ss {
             (streamsize, chunksize) = ss.values();

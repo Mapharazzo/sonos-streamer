@@ -17,6 +17,7 @@ use hashbrown::HashMap;
 use log::{LevelFilter, debug, error, info};
 use simplelog::{ColorChoice, CombinedLogger, ConfigBuilder, TermLogger, WriteLogger};
 use swyh_rs::{
+    autocalibrate::run_startup_calibration,
     enums::{
         messages::MessageType,
         streaming::{
@@ -40,6 +41,7 @@ use swyh_rs::{
         local_ip_address::{get_interfaces, get_local_addr},
         priority::raise_priority,
         ui_logger::*,
+        wizard,
     },
 };
 
@@ -62,6 +64,19 @@ fn main() -> Result<(), i32> {
         }
         args.usage();
         return Err(1);
+    }
+    if args.wizard == Some(true) {
+        let base = get_config_mut().clone();
+        match wizard::run_interactive_wizard(base) {
+            Ok(newc) => {
+                let _ = newc.update_config();
+                *get_config_mut() = newc;
+            }
+            Err(e) => {
+                eprintln!("Setup wizard failed: {e}");
+                return Err(1);
+            }
+        }
     }
     // first initialize cpal audio to prevent COM reinitialize panic on Windows
     // but it's possible that there is no default audio device
@@ -113,9 +128,6 @@ fn main() -> Result<(), i32> {
         WriteLogger::new(loglevel, log_config.clone(), File::create(logfile).unwrap()),
     ]);
 
-    // START LATENCY LISTENER (The Microphone)
-    swyh_rs::listener::start_latency_listener();
-
     info!(
         "{} V {}(build: {}) - Running on {}, {}, {} - Logging started.",
         APP_NAME,
@@ -133,6 +145,16 @@ fn main() -> Result<(), i32> {
 
     info!("Commandline args: {args:?}");
     info!("Current config: {config:?}");
+
+    if let Some(ref m) = args.mic_input_name {
+        config.input_device = Some(m.clone());
+    }
+    if let Some(t) = args.latency_threshold_ms {
+        config.latency_threshold_ms = Some(t);
+    }
+    if args.no_calibrate == Some(true) {
+        config.auto_calibrate = Some(false);
+    }
 
     if args.inject_silence.is_some() {
         config.inject_silence = args.inject_silence;
@@ -326,6 +348,8 @@ fn main() -> Result<(), i32> {
     // update config with new args
     sync_config(&config);
 
+    swyh_rs::listener::start_latency_listener(config.input_device.clone());
+
     // get the message channel
     let msg_tx = get_msgchannel().0.clone();
     let msg_rx = get_msgchannel().1.clone();
@@ -410,6 +434,12 @@ fn main() -> Result<(), i32> {
                 MessageType::PlayerMessage(_) => (),
                 MessageType::LogMessage(_) => (),
                 MessageType::CaptureAborted => (),
+                MessageType::LatencyResult(ms) => {
+                    ui_log(
+                        LogCategory::Info,
+                        &format!("Measured round-trip latency: {ms} ms"),
+                    );
+                }
             }
         }
         // now check for player names(s) instead of ip addresses
@@ -512,7 +542,9 @@ fn main() -> Result<(), i32> {
             &format!("Serving started on port {port}..."),
         );
     } else {
-        for ip in config.active_renderers {
+        let do_cal = config.auto_calibrate.unwrap_or(true) && args.no_calibrate != Some(true);
+        let thr_ms = config.latency_threshold_ms.unwrap_or(500);
+        for ip in config.active_renderers.clone() {
             if let Some(pl) = get_renderers()
                 .iter()
                 .find(|&renderer| renderer.remote_addr == ip)
@@ -528,6 +560,9 @@ fn main() -> Result<(), i32> {
                 ui_log(LogCategory::Info, &format!("Playing to {pl_name}"));
                 playing.push(player);
             }
+        }
+        if do_cal && !playing.is_empty() {
+            run_startup_calibration(&mut playing, &local_addr, streaminfo, thr_ms, 5);
         }
     }
 
@@ -567,6 +602,12 @@ fn main() -> Result<(), i32> {
                     }
                 }
                 MessageType::LogMessage(msg) => ui_log(LogCategory::Info, &msg),
+                MessageType::LatencyResult(ms) => {
+                    ui_log(
+                        LogCategory::Info,
+                        &format!("Measured round-trip latency: {ms} ms"),
+                    );
+                }
                 MessageType::CaptureAborted => {
                     // retry count when audio capture is broken
                     let mut capture_retry_count = 0i32;

@@ -5,7 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
- 
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,18 +25,16 @@ jobs:
         if [[ ${RUNNER_OS} == "Linux" ]]; then
             sudo apt-get update
             sudo apt-get install -y lib{pango1.0,x11,xext,xft,xinerama}-dev\
-                lib{xcursor,xrender,xfixes,png,gl1-mesa,rust-alsa-sys}-dev\
-                libglu1-mesa-dev
+                lib{xcursor,xrender,xfixes,png,gl1-mesa}-dev\
+                libglu1-mesa-dev libasound2-dev pkg-config
         fi
     - uses: actions/checkout@v6
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
-    - name: Build app
-      working-directory: src
+    - name: Build and test
       shell: bash
       run: |
-        cargo build --bin swyh-rs
-        cargo build --bin swyh-rs-cli --features cli --no-default-features
-
+        cargo build --bin swyh-rs-cli --features cli
+        cargo test --features cli
