@@ -37,6 +37,7 @@ use std::{
 
 static FILL_LPCM_READ_CALLS: AtomicU64 = AtomicU64::new(0);
 static FILL_LPCM_READ_BYTES: AtomicU64 = AtomicU64::new(0);
+static DITHER_APPLY_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Shared audio sample buffer passed between capture and streaming threads.
 pub type AudioSamples = Arc<Vec<f32>>;
@@ -76,13 +77,35 @@ fn apply_latency_pulse_if_triggered(samples: &mut Vec<f32>) -> bool {
 /// Some DLNA renderers (notably Sonos) drop long-lived HTTP streams that are **perfect** digital
 /// silence for many seconds — common with WASAPI loopback before any app outputs to the device.
 /// Add imperceptible triangular dither in normalized float (~±1) so PCM is not all-zero.
+///
+/// WASAPI often delivers buffers with tiny non-zero float noise (peak ~1e-6); a naive `peak <
+/// 1e-8` check never dithered those, so Sonos still saw "digital silence" and closed ~15s later.
 fn maybe_dither_digital_silence(bits_per_sample: u16, samples: &mut [f32]) {
-    let peak = samples.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
-    if peak > 1.0e-8 {
+    if samples.is_empty() {
         return;
     }
+    let peak = samples.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+    let sum_sq: f64 = samples.iter().map(|x| f64::from(*x) * f64::from(*x)).sum();
+    let rms = (sum_sq / samples.len() as f64).sqrt() as f32;
+    // Idle loopback: max(peak, rms) below ~-60 dBFS — dither so Sonos does not see a flat bitstream.
+    const QUIET_GATE: f32 = 1.0e-3;
+    if peak.max(rms) > QUIET_GATE {
+        return;
+    }
+    // #region agent log
+    let n = DITHER_APPLY_COUNT.fetch_add(1, Ordering::Relaxed);
+    if n % 400 == 0 {
+        crate::debug_agent::agent_log(
+            "H12",
+            "rwstream.rs:maybe_dither",
+            "dither_quiet_buffer",
+            &format!(r#"{{"n":{n},"peak":{peak},"rms":{rms}}}"#),
+        );
+    }
+    // #endregion
     let scale = 2_f32.powi(i32::from(bits_per_sample.clamp(1, 32)));
-    let amp = (1.0 / scale) * 0.35;
+    // ~1 LSB peak-to-peak after i16 quantize
+    let amp = (1.0 / scale) * 1.0;
     for (i, s) in samples.iter_mut().enumerate() {
         let tri = match i % 4 {
             0 => -1.0f32,
