@@ -1,13 +1,12 @@
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Sample, SampleFormat};
-use dasp_sample::ToSample;
 use log::{error, info, warn};
 use std::sync::atomic::Ordering;
 
 use crate::enums::messages::MessageType;
 use crate::globals::statics::get_msgchannel;
 use crate::latency::{PULSE_INJECTED_AT, barker_mono, complete_latency_measurement, now_ms};
-use crate::utils::audiodevices::pick_input_cpal_device;
+use crate::utils::audiodevices::{cpal_device_display_name, pick_input_cpal_device};
 
 const NCC_THRESHOLD: f32 = 0.35;
 
@@ -33,7 +32,7 @@ pub fn start_latency_listener(input_name: Option<String>) {
         let channels = usize::from(config.channels());
         info!(
             "Latency listener on: {} ({} ch, {:?})",
-            device.name().unwrap_or_default(),
+            cpal_device_display_name(&device),
             channels,
             config.sample_format()
         );

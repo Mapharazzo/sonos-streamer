@@ -74,6 +74,12 @@ fn get_device_name(device: &cpal::Device) -> Result<String, cpal::DeviceNameErro
     }
 }
 
+/// Human-readable label for logging and UI (uses `Device::description`, not deprecated `name()`).
+#[must_use]
+pub fn cpal_device_display_name(device: &cpal::Device) -> String {
+    get_device_name(device).unwrap_or_else(|_| "Unknown/unnamed".into())
+}
+
 impl Device {
     /// Construct a [`Device`] from a [`cpal::Device`].
     ///
@@ -270,8 +276,7 @@ pub fn pick_input_cpal_device(name_substr: Option<&str>) -> Option<cpal::Device>
     if let Some(q) = name_substr.filter(|s| !s.is_empty()) {
         if let Ok(devs) = host.input_devices() {
             for dev in devs {
-                let ok = dev
-                    .name()
+                let ok = get_device_name(&dev)
                     .map(|n| n.to_uppercase().contains(&q.to_uppercase()))
                     .unwrap_or(false);
                 if ok {

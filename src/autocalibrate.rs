@@ -46,7 +46,7 @@ pub fn run_startup_calibration(
             thread::sleep(Duration::from_millis(400));
             continue;
         };
-        if ms <= threshold_ms {
+        if ms <= u64::from(threshold_ms) {
             info!("Startup latency OK: {ms} ms (threshold {threshold_ms} ms)");
             return;
         }
