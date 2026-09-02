@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sonos Tab Caster</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="eyebrow">SONOS TAB CASTER</span>
+        <h1>Send this tab to Sonos</h1>
+        <p id="status" role="status" aria-live="polite">Loading extension state…</p>
+      </header>
+
+      <section aria-labelledby="pair-heading">
+        <h2 id="pair-heading">Local app</h2>
+        <label for="token">Pairing token</label>
+        <div class="row">
+          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste token from the Windows app">
+          <button id="pair" type="button">Pair</button>
+        </div>
+      </section>
+
+      <section aria-labelledby="cast-heading">
+        <h2 id="cast-heading">Playback</h2>
+        <label for="renderer">Sonos room</label>
+        <select id="renderer">
+          <option value="">Choose a room</option>
+        </select>
+        <div class="actions">
+          <button id="cast" class="primary" type="button" disabled>Cast current tab</button>
+          <button id="stop" type="button" disabled>Stop</button>
+        </div>
+      </section>
+
+      <section aria-labelledby="sync-heading">
+        <h2 id="sync-heading">Lip sync</h2>
+        <p class="hint">Measured delay: <output id="measured">0 ms</output></p>
+        <label for="offset">Manual adjustment (−5000 to 5000 ms)</label>
+        <div class="row">
+          <input id="offset" type="number" min="-5000" max="5000" step="1" value="0">
+          <button id="apply-offset" type="button">Apply</button>
+        </div>
+        <button id="calibrate" type="button" disabled>Run audible calibration</button>
+        <p class="hint">Calibration briefly plays a timing signal through the selected speaker.</p>
+      </section>
+
+      <details>
+        <summary>Self-hosted Plex</summary>
+        <label for="plex-origin">Plex server URL</label>
+        <div class="row">
+          <input id="plex-origin" type="url" placeholder="https://plex.example.test">
+          <button id="register-plex" type="button">Allow</button>
+        </div>
+        <p class="hint">Chrome will ask before this extension can run on that origin.</p>
+      </details>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

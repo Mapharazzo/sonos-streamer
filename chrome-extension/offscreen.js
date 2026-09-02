@@ -11,6 +11,7 @@ let audioContext = null;
 let mediaSource = null;
 let workletNode = null;
 let backpressureWarningSent = false;
+let endingTrack = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== 'object') return undefined;
@@ -51,12 +52,27 @@ async function connectBridge(token, requestedUrl = BRIDGE_URL) {
   nextSocket.binaryType = 'arraybuffer';
   socket = nextSocket;
 
-  await new Promise((resolve, reject) => {
-    nextSocket.addEventListener('open', resolve, { once: true });
-    nextSocket.addEventListener('error', () => reject(new Error('Could not connect to the local Sonos app')), {
-      once: true,
+  try {
+    await new Promise((resolve, reject) => {
+      nextSocket.addEventListener('open', resolve, { once: true });
+      nextSocket.addEventListener(
+        'error',
+        () => reject(new Error('Could not connect to the local Sonos app')),
+        { once: true },
+      );
+      nextSocket.addEventListener(
+        'close',
+        () => reject(new Error('The local Sonos app closed the connection')),
+        { once: true },
+      );
     });
-  });
+  } catch (error) {
+    if (socket === nextSocket) socket = null;
+    authenticated = false;
+    nextSocket.close();
+    broadcast({ type: 'bridge-disconnected', message: publicError(error) });
+    throw error;
+  }
   if (socket !== nextSocket || generation !== socketGeneration) {
     nextSocket.close();
     throw new Error('Bridge connection was superseded');
@@ -117,8 +133,9 @@ async function startCapture(streamId) {
     video: false,
   });
 
+  let context = null;
   try {
-    const context = new AudioContext({ sampleRate: 48000 });
+    context = new AudioContext({ sampleRate: 48000 });
     await context.audioWorklet.addModule('audio-worklet.js');
     const source = context.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(context, 'tab-audio-processor', {
@@ -136,11 +153,14 @@ async function startCapture(streamId) {
     audioContext = context;
     mediaSource = source;
     workletNode = node;
+    endingTrack = stream.getAudioTracks()[0] ?? null;
+    if (endingTrack) endingTrack.onended = () => broadcast({ type: 'capture-ended' });
     packetizer.reset();
     backpressureWarningSent = false;
     broadcast({ type: 'capture-started' });
   } catch (error) {
     stream.getTracks().forEach((track) => track.stop());
+    if (context && context.state !== 'closed') await context.close();
     throw error;
   }
 }
@@ -194,12 +214,14 @@ async function stopCapture() {
     workletNode.disconnect();
   }
   if (mediaSource) mediaSource.disconnect();
+  if (endingTrack) endingTrack.onended = null;
   if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
   if (audioContext && audioContext.state !== 'closed') await audioContext.close();
   workletNode = null;
   mediaSource = null;
   mediaStream = null;
   audioContext = null;
+  endingTrack = null;
 }
 
 async function disconnectSocket() {

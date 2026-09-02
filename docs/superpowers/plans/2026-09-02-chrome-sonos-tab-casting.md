@@ -726,7 +726,7 @@ git commit -m "feat(extension): stream packetized tab audio"
 - Produces: `ensureOffscreenDocument()`, `startCapture(tabId, rendererId)`, `stopCapture(reason)`, and `registerPlexOrigin(origin)`.
 - Produces: popup commands `pair`, `select-renderer`, `cast`, `stop`, `calibrate`, and `set-offset`.
 
-- [ ] **Step 1: Write failing lifecycle tests around extracted pure decisions**
+- [x] **Step 1: Write failing lifecycle tests around extracted pure decisions**
 
 ```javascript
 test('cast requires token, renderer, and supported active tab', () => {
@@ -742,19 +742,19 @@ test('terminal capture event requests one idempotent cleanup', () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused test and confirm orchestration helpers are absent**
+- [x] **Step 2: Run the focused test and confirm orchestration helpers are absent**
 
 Run: `cd chrome-extension && node --test tests/background-state.test.js`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement capture and accessible popup**
+- [x] **Step 3: Implement capture and accessible popup**
 
 The Cast button message must cause the service worker to call `chrome.tabCapture.getMediaStreamId({targetTabId})` while acting on the user's extension invocation, then send the stream ID to the offscreen document. The worker watches tab removal/navigation and capture status. Self-hosted Plex registration validates an `http`/`https` origin, requests that exact origin, and registers `content-script.js` only after permission succeeds.
 
 The popup renders state without framework dependencies, never logs the token, labels calibration as audible, keeps Cast disabled until connected/paired/renderer-selected, and keeps Stop available during starting/streaming/calibrating phases. Store token, last renderer, measured delays, and manual offsets in `chrome.storage.local`.
 
-- [ ] **Step 4: Run tests and static JSON parse**
+- [x] **Step 4: Run tests and static JSON parse**
 
 Run: `cd chrome-extension && node --test tests/*.test.js`
 
@@ -764,7 +764,7 @@ Run: `node -e "JSON.parse(require('fs').readFileSync('chrome-extension/manifest.
 
 Expected: exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension
