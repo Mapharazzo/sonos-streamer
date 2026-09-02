@@ -481,14 +481,17 @@ fn on_first_capture_callback() {
     }
 }
 
-/// Distribute the captured f32 audio samples chunk to all our HTTP client threads
-/// and to the RMS monitor thread if needed.
-/// All sample processing threads share the sample chunk through an Arc
-fn distribute_samples(f32_samples: &[f32], rms_sender: &Sender<AudioSamples>) {
-    let shared_samples = AudioSamples::new(f32_samples.to_vec());
+/// Publish a shared sample chunk to every active HTTP streaming client.
+pub fn publish_samples(samples: AudioSamples) {
     get_clients()
         .iter()
-        .for_each(|(_, client)| client.write(Arc::clone(&shared_samples)));
+        .for_each(|(_, client)| client.write(Arc::clone(&samples)));
+}
+
+/// Publish desktop-capture samples to HTTP clients and, when enabled, the RMS monitor.
+fn publish_capture_samples(f32_samples: &[f32], rms_sender: &Sender<AudioSamples>) {
+    let shared_samples = AudioSamples::new(f32_samples.to_vec());
+    publish_samples(Arc::clone(&shared_samples));
     if RUN_RMS_MONITOR.load(Ordering::Relaxed) {
         rms_sender.send(Arc::clone(&shared_samples)).unwrap();
     }
@@ -497,7 +500,7 @@ fn distribute_samples(f32_samples: &[f32], rms_sender: &Sender<AudioSamples>) {
 static ONFIRSTCALL: Once = Once::new();
 
 /// `wave_reader` - the generic captured audio input stream reader.
-/// Calls `distribute_samples` to feed all the threads needing them.
+/// Calls `publish_capture_samples` to feed all the threads needing them.
 fn wave_reader<T>(samples: &[T], f32_samples: &mut Vec<f32>, rms_sender: &Sender<AudioSamples>)
 where
     T: Sample + ToSample<f32>,
@@ -505,12 +508,33 @@ where
     ONFIRSTCALL.call_once(on_first_capture_callback);
     f32_samples.clear();
     f32_samples.extend(samples.iter().map(|x: &T| T::to_sample::<f32>(*x)));
-    distribute_samples(f32_samples, rms_sender);
+    publish_capture_samples(f32_samples, rms_sender);
 }
 
 /// Specialized version of the generic `wave_reader` above for the "default" f32 case with Alsa/WasApi/PipeWire/Pulse.
 /// It bypasses the samples conversion iterator.
 fn wave_reader_f32(samples: &[f32], rms_sender: &Sender<AudioSamples>) {
     ONFIRSTCALL.call_once(on_first_capture_callback);
-    distribute_samples(samples, rms_sender);
+    publish_capture_samples(samples, rms_sender);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use crossbeam_channel::unbounded;
+
+    use super::publish_capture_samples;
+    use crate::{globals::statics::RUN_RMS_MONITOR, utils::rwstream::AudioSamples};
+
+    #[test]
+    fn capture_publication_retains_rms_fan_out() {
+        let previous = RUN_RMS_MONITOR.swap(true, Ordering::Relaxed);
+        let (sender, receiver) = unbounded::<AudioSamples>();
+
+        publish_capture_samples(&[0.25, -0.25], &sender);
+        RUN_RMS_MONITOR.store(previous, Ordering::Relaxed);
+
+        assert_eq!(receiver.try_recv().unwrap().as_slice(), &[0.25, -0.25]);
+    }
 }

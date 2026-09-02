@@ -296,7 +296,7 @@ git commit -m "feat(browser): define authenticated bridge protocol"
 - Produces: `publish_samples(samples: AudioSamples)` in `utils::audiodevices`, shared by CPAL and browser inputs.
 - Produces: `BrowserAudioPublisher::publish(&self, bytes: &[u8]) -> Result<usize, AudioPacketError>`.
 
-- [ ] **Step 1: Write failing PCM boundary tests**
+- [x] **Step 1: Write failing PCM boundary tests**
 
 ```rust
 #[test]
@@ -319,13 +319,13 @@ fn rejects_partial_stereo_frame_and_oversized_packet() {
 }
 ```
 
-- [ ] **Step 2: Run and confirm decode API is absent**
+- [x] **Step 2: Run and confirm decode API is absent**
 
 Run: `cargo test --all-features browser::audio`
 
 Expected: FAIL because `decode_packet` is undefined.
 
-- [ ] **Step 3: Implement decode and extract publication**
+- [x] **Step 3: Implement decode and extract publication**
 
 ```rust
 pub fn decode_packet(session: &AudioSession, bytes: &[u8]) -> Result<AudioSamples, AudioPacketError> {
@@ -340,7 +340,7 @@ pub fn decode_packet(session: &AudioSession, bytes: &[u8]) -> Result<AudioSample
 
 Move the current client fan-out into `pub fn publish_samples(samples: AudioSamples)`. Keep RMS delivery in a separate private `publish_capture_samples(samples, rms_sender)` so browser packets do not unexpectedly enter the loopback RMS path. Make CPAL callbacks call the extracted functions without changing their semantics.
 
-- [ ] **Step 4: Run audio and existing stream tests**
+- [x] **Step 4: Run audio and existing stream tests**
 
 Run: `cargo test --all-features browser::audio`
 
@@ -350,7 +350,7 @@ Run: `cargo test --all-features utils::samples_conv`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/browser src/utils/audiodevices.rs

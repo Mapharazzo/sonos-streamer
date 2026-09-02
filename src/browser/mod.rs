@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod auth;
 pub mod mode;
 pub mod protocol;
