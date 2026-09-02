@@ -839,7 +839,7 @@ git commit -m "feat(extension): add bounded timed video queue"
 - Produces: `WebGlDelaySurface(video, placement, options)` with `start(delayMs)`, `setDelay(delayMs)`, and idempotent `dispose()`.
 - Emits: `onFallback({code, message})` without leaving the source video hidden.
 
-- [ ] **Step 1: Write failing lifecycle tests with a fake GL adapter**
+- [x] **Step 1: Write failing lifecycle tests with a fake GL adapter**
 
 ```javascript
 test('source video is hidden only after first successful captured texture', () => {
@@ -859,25 +859,25 @@ test('allocation failure restores exact original inline styles', () => {
 });
 ```
 
-- [ ] **Step 2: Run and confirm surface is absent**
+- [x] **Step 2: Run and confirm surface is absent**
 
 Run: `cd chrome-extension && node --test tests/webgl-lifecycle.test.js`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement original WebGL capture/downscale/render pipeline**
+- [x] **Step 3: Implement original WebGL capture/downscale/render pipeline**
 
 Create a pointer-transparent overlay canvas. Compile a minimal passthrough shader. Maintain one reusable full-source texture and framebuffer-blit each accepted source frame into a budgeted queue texture. Use `requestVideoFrameCallback` for new frames, throttled to 30 FPS, and `requestAnimationFrame` to call `queue.takeDue(performance.now())` and render the returned texture. Explicitly delete replaced/displayed/queued textures.
 
 Save exact original `style.opacity`, `style.visibility`, and placement-related values before modification. Handle resize by rebuilding only after a new frame succeeds. On WebGL context loss, CORS/DRM upload exception, allocation failure, cap failure, or disposal: cancel callbacks, delete GPU objects, remove canvas, and restore exact styles.
 
-- [ ] **Step 4: Run lifecycle and queue tests**
+- [x] **Step 4: Run lifecycle and queue tests**
 
 Run: `cd chrome-extension && node --test tests/frame-queue.test.js tests/resource-budget.test.js tests/webgl-lifecycle.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension/video chrome-extension/tests chrome-extension/manifest.json
