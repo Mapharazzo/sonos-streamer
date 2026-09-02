@@ -23,6 +23,7 @@ use crate::browser::{
     commands::{BrowserCommand, BrowserEvent},
     protocol::{AudioSession, ClientMessage, ServerEvent, parse_client_message, validate_hello},
 };
+use crate::enums::messages::MessageType;
 
 const BRIDGE_PATH: &str = "/browser/v1";
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -68,7 +69,7 @@ impl Drop for BrowserBridgeHandle {
 impl BrowserBridge {
     pub fn spawn(
         config: BrowserBridgeConfig,
-        command_tx: Sender<BrowserCommand>,
+        command_tx: Sender<MessageType>,
         event_rx: Receiver<BrowserEvent>,
     ) -> io::Result<BrowserBridgeHandle> {
         if !config.addr.ip().is_loopback() {
@@ -151,7 +152,7 @@ impl Drop for ProducerLease {
 fn run_connection(
     stream: TcpStream,
     config: BrowserBridgeConfig,
-    command_tx: Sender<BrowserCommand>,
+    command_tx: Sender<MessageType>,
     event_rx: Receiver<BrowserEvent>,
     shutdown: Arc<AtomicBool>,
     producer_active: Arc<AtomicBool>,
@@ -230,7 +231,10 @@ fn run_connection(
                         return;
                     }
                 } else if let Some(command) = BrowserCommand::from_client_message(message) {
-                    if command_tx.send(command).is_err() {
+                    if command_tx
+                        .send(MessageType::BrowserCommand(command))
+                        .is_err()
+                    {
                         send_terminal_error(
                             &mut socket,
                             "bridge-stopping",
@@ -343,7 +347,7 @@ mod tests {
     struct BridgeHarness {
         handle: BrowserBridgeHandle,
         token: PairingToken,
-        command_rx: Receiver<BrowserCommand>,
+        command_rx: Receiver<crate::enums::messages::MessageType>,
         _event_tx: Sender<BrowserEvent>,
     }
 
@@ -491,11 +495,15 @@ mod tests {
             ))
             .expect("list command");
 
+        let crate::enums::messages::MessageType::BrowserCommand(command) = harness
+            .command_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("forwarded command")
+        else {
+            panic!("expected browser command");
+        };
         assert_eq!(
-            harness
-                .command_rx
-                .recv_timeout(Duration::from_secs(1))
-                .expect("forwarded command"),
+            command,
             BrowserCommand {
                 request_id: "renderers-1".to_string(),
                 kind: BrowserCommandKind::ListRenderers,

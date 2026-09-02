@@ -313,6 +313,15 @@ impl Configuration {
         Ok(())
     }
 
+    #[must_use]
+    pub fn redacted_debug(&self) -> String {
+        let mut redacted = self.clone();
+        if redacted.browser_pairing_token.is_some() {
+            redacted.browser_pairing_token = Some("[redacted]".to_string());
+        }
+        format!("{redacted:?}")
+    }
+
     fn choose_config_path() -> PathBuf {
         if let Some(path) = Self::get_arg_config_path() {
             path
@@ -395,5 +404,15 @@ mod tests {
 
         assert_eq!(config.browser_bridge_port, 5902);
         assert_eq!(config.browser_pairing_token, None);
+    }
+
+    #[test]
+    fn redacted_debug_never_exposes_pairing_token() {
+        let mut config: Configuration = toml::from_str("").expect("configuration");
+        config.browser_pairing_token = Some("top-secret-token".to_string());
+
+        let debug = config.redacted_debug();
+        assert!(!debug.contains("top-secret-token"));
+        assert!(debug.contains("[redacted]"));
     }
 }

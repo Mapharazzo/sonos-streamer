@@ -10,6 +10,42 @@ pub struct BrowserMode {
     pub bridge_port: u16,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum AudioSourcePlan {
+    DesktopLoopback,
+    BrowserOnly,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct StartupPlan {
+    pub audio_source: AudioSourcePlan,
+    pub start_latency_listener: bool,
+    pub start_ssdp: bool,
+    pub browser_mode: Option<BrowserMode>,
+}
+
+impl StartupPlan {
+    #[must_use]
+    pub const fn for_browser(mode: BrowserMode) -> Self {
+        Self {
+            audio_source: AudioSourcePlan::BrowserOnly,
+            start_latency_listener: true,
+            start_ssdp: true,
+            browser_mode: Some(mode),
+        }
+    }
+
+    #[must_use]
+    pub const fn for_desktop() -> Self {
+        Self {
+            audio_source: AudioSourcePlan::DesktopLoopback,
+            start_latency_listener: true,
+            start_ssdp: true,
+            browser_mode: None,
+        }
+    }
+}
+
 impl BrowserMode {
     #[must_use]
     pub fn new(bridge_port: u16) -> Self {
@@ -43,7 +79,7 @@ impl BrowserMode {
 
 #[cfg(test)]
 mod tests {
-    use super::BrowserMode;
+    use super::{AudioSourcePlan, BrowserMode, StartupPlan};
     use crate::{enums::streaming::StreamingFormat, utils::configuration::Configuration};
 
     #[test]
@@ -81,5 +117,14 @@ mod tests {
             BrowserMode::from_args(&browser_args, &config),
             Some(BrowserMode::new(6002))
         );
+    }
+
+    #[test]
+    fn browser_startup_plan_never_opens_loopback_capture() {
+        let plan = StartupPlan::for_browser(BrowserMode::new(5902));
+
+        assert_eq!(plan.audio_source, AudioSourcePlan::BrowserOnly);
+        assert!(plan.start_latency_listener);
+        assert!(plan.start_ssdp);
     }
 }

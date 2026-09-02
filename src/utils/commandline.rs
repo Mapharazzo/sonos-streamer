@@ -47,7 +47,7 @@ impl Args {
             r#"
 Recognized options:
     -h (--help) : print usage
-    -n (--no_run) : dry-run, don't start streaming
+    -n (--no_run, --dry-run) : dry-run, don't start streaming
     -C (--configfile) string : alternative full pathname of configfile
     -c (--config_id) string : config_id [_cli]
     -p (--server_port) u16 : server_port [5901]
@@ -99,7 +99,7 @@ Recognized options:
                 Short('h') | Long("help") => {
                     self.usage();
                 }
-                Short('n') | Long("no_run") => {
+                Short('n') | Long("no_run") | Long("dry-run") => {
                     self.dry_run = Some(true);
                 }
                 Short('c') | Long("config_id") => {
@@ -339,5 +339,12 @@ mod tests {
         let args = Args::parse_args(["--show-browser-token"]).expect("token args");
 
         assert!(args.show_browser_token);
+    }
+
+    #[test]
+    fn parses_dry_run_alias() {
+        let args = Args::parse_args(["--dry-run"]).expect("dry-run args");
+
+        assert_eq!(args.dry_run, Some(true));
     }
 }

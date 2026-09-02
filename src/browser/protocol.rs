@@ -148,6 +148,10 @@ pub enum ServerEvent {
         received_packets: u64,
         dropped_packets: u64,
     },
+    ManualOffsetSet {
+        request_id: String,
+        milliseconds: i32,
+    },
     Warning {
         request_id: Option<String>,
         code: String,

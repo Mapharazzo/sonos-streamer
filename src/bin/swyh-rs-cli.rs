@@ -1,7 +1,7 @@
 #![cfg(feature = "cli")]
 use std::{
     fs::File,
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     path::Path,
     sync::{
         Arc,
@@ -18,7 +18,14 @@ use log::{LevelFilter, debug, error, info};
 use simplelog::{ColorChoice, CombinedLogger, ConfigBuilder, TermLogger, WriteLogger};
 use swyh_rs::{
     autocalibrate::run_startup_calibration,
-    browser::mode::BrowserMode,
+    browser::{
+        auth::ensure_pairing_token,
+        bridge::{BrowserBridge, BrowserBridgeConfig},
+        calibration::CalibrationCoordinator,
+        commands::{BrowserCommand, BrowserCommandKind, BrowserPlaybackState, PlaybackAction},
+        mode::BrowserMode,
+        protocol::{RendererSummary, ServerEvent},
+    },
     enums::{
         messages::MessageType,
         streaming::{
@@ -82,7 +89,11 @@ fn main() -> Result<(), i32> {
     }
     // first initialize cpal audio to prevent COM reinitialize panic on Windows
     // but it's possible that there is no default audio device
-    let mut audio_output_device_opt = get_default_audio_output_device();
+    let mut audio_output_device_opt = if args.browser_source || args.show_browser_token {
+        None
+    } else {
+        get_default_audio_output_device()
+    };
 
     // initialize config
     let mut config = {
@@ -97,6 +108,29 @@ fn main() -> Result<(), i32> {
 
         conf.clone()
     };
+    let pairing_token = if args.browser_source || args.show_browser_token {
+        let token = ensure_pairing_token(&mut config).map_err(|error| {
+            eprintln!("Could not initialize browser pairing: {error}");
+            1
+        })?;
+        config.update_config().map_err(|error| {
+            eprintln!("Could not save browser pairing token: {error}");
+            1
+        })?;
+        Some(token)
+    } else {
+        None
+    };
+    if args.show_browser_token {
+        println!(
+            "{}",
+            pairing_token
+                .as_ref()
+                .expect("pairing token initialized")
+                .to_hex()
+        );
+        return Ok(());
+    }
     if let Some(config_id) = &config.config_id
         && !config_id.is_empty()
     {
@@ -146,7 +180,7 @@ fn main() -> Result<(), i32> {
     );
 
     info!("Commandline args: {args:?}");
-    info!("Current config: {config:?}");
+    info!("Current config: {}", config.redacted_debug());
 
     if let Some(ref m) = args.mic_input_name {
         config.input_device = Some(m.clone());
@@ -166,7 +200,11 @@ fn main() -> Result<(), i32> {
     }
     let browser_mode = BrowserMode::from_args(&args, &config);
     // set soundsource index or name from args or config
-    let audio_devices = get_output_audio_devices();
+    let audio_devices = if browser_mode.is_some() {
+        Vec::new()
+    } else {
+        get_output_audio_devices()
+    };
     // get the index from args or config
     let mut ss_index = {
         if let Some(index) = args.sound_source_index {
@@ -310,7 +348,7 @@ fn main() -> Result<(), i32> {
             channels: audio_cfg.channels(),
         }
     };
-    let mut audio_output_device = audio_output_device_opt.expect("No default audio device");
+    let mut audio_output_device = audio_output_device_opt;
 
     // raise process priority a bit to prevent audio stuttering under cpu load
     raise_priority();
@@ -327,11 +365,36 @@ fn main() -> Result<(), i32> {
     // update config with new args
     sync_config(&config);
 
-    swyh_rs::listener::start_latency_listener(config.input_device.clone());
-
     // get the message channel
     let msg_tx = get_msgchannel().0.clone();
     let msg_rx = get_msgchannel().1.clone();
+
+    let (browser_event_tx, browser_event_rx) = unbounded();
+    let _browser_bridge = if let Some(mode) = browser_mode {
+        let token = pairing_token.clone().expect("browser pairing token");
+        Some(
+            BrowserBridge::spawn(
+                BrowserBridgeConfig {
+                    addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, mode.bridge_port)),
+                    token,
+                    max_text_bytes: 64 * 1024,
+                    max_binary_bytes: 64 * 1024,
+                },
+                msg_tx.clone(),
+                browser_event_rx,
+            )
+            .map_err(|error| {
+                eprintln!("Could not start browser bridge: {error}");
+                1
+            })?,
+        )
+    } else {
+        None
+    };
+    let calibration = CalibrationCoordinator::new();
+    let mut browser_state = BrowserPlaybackState::Idle;
+
+    swyh_rs::listener::start_latency_listener(config.input_device.clone());
 
     let mut serve_only = args.serve_only.unwrap_or(false);
     // if only serving: no ssdp discovery
@@ -373,6 +436,14 @@ fn main() -> Result<(), i32> {
         config.buffering_delay_msec = args.upfront_buffer;
     }
 
+    // Persist user preferences and pairing data before installing browser-only transport values.
+    sync_config(&config);
+    if let Some(mode) = browser_mode {
+        mode.apply_session_overrides(&mut config);
+        let mut shared_config = get_config_mut();
+        *shared_config = config.clone();
+    }
+
     // start the webserver
     let server_port = config.server_port;
     let feedback_tx = msg_tx.clone();
@@ -392,7 +463,10 @@ fn main() -> Result<(), i32> {
     thread::yield_now();
 
     // we may have to translate player names to IP addresses
-    if !serve_only && (args.player_ip.is_some() || config.last_renderer.is_some()) {
+    if browser_mode.is_none()
+        && !serve_only
+        && (args.player_ip.is_some() || config.last_renderer.is_some())
+    {
         // give the webserver a chance to start and wait for ssdp to complete
         thread::sleep(Duration::from_secs(5));
         // get the results of the ssdp discovery
@@ -419,6 +493,7 @@ fn main() -> Result<(), i32> {
                         &format!("Measured round-trip latency: {ms} ms"),
                     );
                 }
+                MessageType::BrowserCommand(_) => (),
             }
         }
         // now check for player names(s) instead of ip addresses
@@ -457,7 +532,7 @@ fn main() -> Result<(), i32> {
     }
 
     // if no player specified: switch to serve mode
-    if config.last_renderer.is_none() {
+    if browser_mode.is_none() && config.last_renderer.is_none() {
         serve_only = true;
     }
 
@@ -469,46 +544,41 @@ fn main() -> Result<(), i32> {
         config.auto_reconnect = true;
     }
     // update config with new args
-    sync_config(&config);
+    if browser_mode.is_none() {
+        sync_config(&config);
+    }
 
-    let mut player: Option<Renderer> = None;
     // select the player unless only serving
-    if !serve_only {
+    if browser_mode.is_none() && !serve_only {
         let last_renderer = config.last_renderer.as_ref().unwrap();
         if get_renderers().is_empty() {
             error!("No renderers found!!!");
             return Err(-1);
         }
         // default = first player
-        player = Some(get_renderers()[0].clone());
+        let mut selected_player = get_renderers()[0].clone();
         // but use the configured renderer if present
         if let Some(pl) = get_renderers()
             .iter()
             .find(|&renderer| renderer.remote_addr == *last_renderer)
         {
-            player = Some(pl.clone());
+            selected_player = pl.clone();
         }
-        let def_player = player.as_ref().unwrap();
         // if specified player ip not found: use default player
-        if *last_renderer != def_player.remote_addr {
-            config.last_renderer = Some(def_player.remote_addr.clone());
+        if *last_renderer != selected_player.remote_addr {
+            config.last_renderer = Some(selected_player.remote_addr.clone());
         }
         ui_log(
             LogCategory::Info,
-            &format!("Default player ip = {}", def_player.remote_addr),
+            &format!("Default player ip = {}", selected_player.remote_addr),
         );
     }
 
     // update config with new args
-    sync_config(&config);
-    info!("New config: {config:?}");
-
-    // Apply transport overrides only to this process; keep desktop preferences unchanged on disk.
-    if let Some(mode) = browser_mode {
-        mode.apply_session_overrides(&mut config);
-        let mut shared_config = get_config_mut();
-        *shared_config = config.clone();
+    if browser_mode.is_none() {
+        sync_config(&config);
     }
+    info!("New config: {}", config.redacted_debug());
 
     // exit here if dry-run
     if args.dry_run.is_some() {
@@ -520,26 +590,36 @@ fn main() -> Result<(), i32> {
     // latency mic listener during idle startup. Latency calibration does not call stop_play or
     // tear down clients; deferring capture avoids WASAPI edge cases from loopback + mic open
     // together before Sonos pulls the stream.
-    debug!("Try capturing system audio");
-    let rms_chan1 = rms_channel.clone();
-    let mut stream: cpal::Stream = match capture_output_audio(&audio_output_device, rms_chan1.0) {
-        Some(s) => s,
-        _ => {
-            ui_log(
-                LogCategory::Error,
-                "Could not capture audio ...Please check configuration.",
-            );
-            return Err(-2);
-        }
+    let mut _loopback_stream = if browser_mode.is_some() {
+        None
+    } else {
+        debug!("Try capturing system audio");
+        let device = audio_output_device
+            .as_ref()
+            .expect("No default audio device");
+        let rms_chan1 = rms_channel.clone();
+        let stream = match capture_output_audio(device, rms_chan1.0) {
+            Some(stream) => stream,
+            None => {
+                ui_log(
+                    LogCategory::Error,
+                    "Could not capture audio ...Please check configuration.",
+                );
+                return Err(-2);
+            }
+        };
+        stream.play().expect("Unable to play audio stream");
+        log_loopback_capture_stream_started();
+        Some(stream)
     };
-    stream.play().expect("Unable to play audio stream");
-    log_loopback_capture_stream_started();
 
     // If silence injector is on, create a silence injector stream.
     // it has to be kept alive, it only seems unused
     let _silence_stream = {
-        if let Some(true) = config.inject_silence {
-            if let Some(stream) = run_silence_injector(&audio_output_device) {
+        if let Some(true) = config.inject_silence
+            && let Some(device) = audio_output_device.as_ref()
+        {
+            if let Some(stream) = run_silence_injector(device) {
                 ui_log(
                     LogCategory::Info,
                     "Injecting silence into the output stream",
@@ -559,7 +639,13 @@ fn main() -> Result<(), i32> {
 
     // start playing unless only serving
     let mut playing = Vec::new();
-    if serve_only {
+    if browser_mode.is_some() {
+        let port = config.server_port.unwrap_or(SERVER_PORT);
+        ui_log(
+            LogCategory::Info,
+            &format!("Browser source ready on port {port}; waiting for Cast."),
+        );
+    } else if serve_only {
         let port = config.server_port.unwrap_or(SERVER_PORT);
         ui_log(
             LogCategory::Info,
@@ -605,9 +691,34 @@ fn main() -> Result<(), i32> {
                 }
                 MessageType::PlayerMessage(streamer_feedback) => {
                     match streamer_feedback.streaming_state {
-                        StreamingState::Started => {}
+                        StreamingState::Started => {
+                            if browser_mode.is_some() {
+                                let id = browser_state.renderer_id().map(str::to_string);
+                                let _ = browser_event_tx.send(ServerEvent::StreamState {
+                                    renderer_id: id.clone(),
+                                    state: "started".to_string(),
+                                });
+                                if browser_state.on_stream_started()
+                                    == PlaybackAction::StartCalibration
+                                    && config.auto_calibrate.unwrap_or(true)
+                                    && let Some(id) = id
+                                {
+                                    let _ = calibration.start(
+                                        "automatic-calibration",
+                                        id,
+                                        browser_event_tx.clone(),
+                                    );
+                                }
+                            }
+                        }
                         StreamingState::Ended => {
-                            if !serve_only {
+                            if browser_mode.is_some() {
+                                let _ = browser_event_tx.send(ServerEvent::StreamState {
+                                    renderer_id: browser_state.renderer_id().map(str::to_string),
+                                    state: "ended".to_string(),
+                                });
+                            }
+                            if browser_mode.is_none() && !serve_only {
                                 // first check if the renderer has actually not started streaming again
                                 // as this can happen with Bubble/Nest Audio Openhome
                                 let still_streaming = get_clients().values().any(|chanstrm| {
@@ -633,6 +744,9 @@ fn main() -> Result<(), i32> {
                     );
                 }
                 MessageType::CaptureAborted => {
+                    if browser_mode.is_some() {
+                        continue;
+                    }
                     // retry count when audio capture is broken
                     let mut capture_retry_count = 0i32;
                     while capture_retry_count < 5 {
@@ -646,21 +760,36 @@ fn main() -> Result<(), i32> {
                         for adev in audio_devices.into_iter() {
                             if adev.name() == config_name {
                                 info!("Audio capture: reselecting audio source: {}", adev.name());
-                                audio_output_device = adev;
+                                audio_output_device = Some(adev);
                                 found_audio_device = true;
                                 break;
                             }
                         }
                         if found_audio_device {
                             let rms_chan2 = rms_channel.clone();
-                            if let Some(s) = capture_output_audio(&audio_output_device, rms_chan2.0)
+                            if let Some(s) = audio_output_device
+                                .as_ref()
+                                .and_then(|device| capture_output_audio(device, rms_chan2.0))
                             {
-                                stream = s;
-                                stream.play().expect("Unable to play audio stream");
+                                s.play().expect("Unable to play audio stream");
+                                _loopback_stream = Some(s);
                                 info!("Audio capture resumed.");
                                 break;
                             }
                         }
+                    }
+                }
+                MessageType::BrowserCommand(command) => {
+                    if browser_mode.is_some() {
+                        handle_browser_command(
+                            command,
+                            &local_addr,
+                            streaminfo,
+                            &mut playing,
+                            &mut browser_state,
+                            &browser_event_tx,
+                            &calibration,
+                        );
                     }
                 }
             }
@@ -668,7 +797,7 @@ fn main() -> Result<(), i32> {
         // handle CTL-C interrupt: shutdown the player(s)
         if shutting_down.load(Ordering::Relaxed) {
             println!("Received ^C -> exiting.");
-            if !serve_only && player.is_some() && !get_clients().is_empty() {
+            if !playing.is_empty() {
                 for mut pl in playing {
                     if get_clients()
                         .values()
@@ -703,6 +832,133 @@ fn sync_config(config: &Configuration) {
     {
         let mut conf = get_config_mut();
         *conf = config.clone();
+    }
+}
+
+fn renderer_id(renderer: &Renderer) -> String {
+    if !renderer.location.is_empty() {
+        renderer.location.clone()
+    } else if !renderer.dev_url.is_empty() {
+        renderer.dev_url.clone()
+    } else {
+        renderer.remote_addr.clone()
+    }
+}
+
+fn handle_browser_command(
+    command: BrowserCommand,
+    local_addr: &IpAddr,
+    streaminfo: StreamInfo,
+    playing: &mut Vec<Renderer>,
+    state: &mut BrowserPlaybackState,
+    event_tx: &Sender<ServerEvent>,
+    calibration: &CalibrationCoordinator,
+) {
+    let request_id = command.request_id;
+    match command.kind {
+        BrowserCommandKind::ListRenderers => {
+            let renderers = get_renderers()
+                .iter()
+                .map(|renderer| RendererSummary {
+                    id: renderer_id(renderer),
+                    name: renderer.dev_name.clone(),
+                    model: renderer.dev_model.clone(),
+                    address: renderer.remote_addr.clone(),
+                })
+                .collect();
+            let _ = event_tx.send(ServerEvent::RendererList {
+                request_id,
+                renderers,
+            });
+        }
+        BrowserCommandKind::Cast { renderer_id: id } => {
+            let renderer = get_renderers()
+                .iter()
+                .find(|renderer| renderer_id(renderer) == id)
+                .cloned();
+            let Some(mut renderer) = renderer else {
+                let _ = event_tx.send(ServerEvent::Error {
+                    request_id: Some(request_id),
+                    code: "renderer-not-found".to_string(),
+                    message: "the selected renderer is no longer available".to_string(),
+                    terminal: false,
+                });
+                return;
+            };
+
+            for active in playing.iter_mut() {
+                active.stop_play();
+            }
+            playing.clear();
+            match renderer.play(local_addr, streaminfo) {
+                Ok(()) => {
+                    playing.push(renderer);
+                    *state = BrowserPlaybackState::starting(id.clone());
+                    let _ = event_tx.send(ServerEvent::CastState {
+                        request_id: Some(request_id),
+                        renderer_id: Some(id),
+                        state: state.phase().to_string(),
+                    });
+                }
+                Err(message) => {
+                    *state = BrowserPlaybackState::Failed {
+                        renderer_id: Some(id),
+                        message: message.to_string(),
+                    };
+                    let _ = event_tx.send(ServerEvent::Error {
+                        request_id: Some(request_id),
+                        code: "cast-failed".to_string(),
+                        message: message.to_string(),
+                        terminal: false,
+                    });
+                }
+            }
+        }
+        BrowserCommandKind::Stop => {
+            for renderer in playing.iter_mut() {
+                renderer.stop_play();
+            }
+            playing.clear();
+            *state = BrowserPlaybackState::Idle;
+            let _ = event_tx.send(ServerEvent::CastState {
+                request_id: Some(request_id),
+                renderer_id: None,
+                state: state.phase().to_string(),
+            });
+        }
+        BrowserCommandKind::Calibrate => {
+            let Some(id) = state.renderer_id().map(str::to_string) else {
+                let _ = event_tx.send(ServerEvent::CalibrationFailed {
+                    request_id,
+                    code: "not-streaming".to_string(),
+                    message: "cast to a renderer before calibrating".to_string(),
+                });
+                return;
+            };
+            if calibration
+                .start(request_id.clone(), id, event_tx.clone())
+                .is_err()
+            {
+                let _ = event_tx.send(ServerEvent::CalibrationFailed {
+                    request_id,
+                    code: "calibration-busy".to_string(),
+                    message: "a calibration is already running".to_string(),
+                });
+            }
+        }
+        BrowserCommandKind::SetManualOffset { milliseconds } => {
+            let _ = event_tx.send(ServerEvent::ManualOffsetSet {
+                request_id,
+                milliseconds,
+            });
+        }
+        BrowserCommandKind::GetState => {
+            let _ = event_tx.send(ServerEvent::CastState {
+                request_id: Some(request_id),
+                renderer_id: state.renderer_id().map(str::to_string),
+                state: state.phase().to_string(),
+            });
+        }
     }
 }
 

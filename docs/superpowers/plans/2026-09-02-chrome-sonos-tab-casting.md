@@ -450,7 +450,7 @@ git commit -m "feat(browser): add authenticated localhost bridge"
 - Produces: `CalibrationCoordinator::start(event_tx) -> Result<(), CalibrationBusy>`.
 - Produces: CLI command handlers for list, cast, stop, calibrate, manual-offset echo, and state.
 
-- [ ] **Step 1: Write failing source-isolation and transition tests**
+- [x] **Step 1: Write failing source-isolation and transition tests**
 
 ```rust
 #[test]
@@ -469,7 +469,7 @@ fn stream_started_arms_auto_calibration_once() {
 }
 ```
 
-- [ ] **Step 2: Run and verify state APIs fail**
+- [x] **Step 2: Run and verify state APIs fail**
 
 Run: `cargo test --all-features browser_startup_plan`
 
@@ -477,7 +477,7 @@ Run: `cargo test --all-features stream_started_arms_auto_calibration`
 
 Expected: FAIL because startup/state types do not exist.
 
-- [ ] **Step 3: Implement source branching and command ownership**
+- [x] **Step 3: Implement source branching and command ownership**
 
 In browser mode:
 
@@ -498,7 +498,7 @@ Persist the user's ordinary configuration and any newly generated pairing token 
 
 Refactor `measure_latency_roundtrip` so a `CalibrationCoordinator` can run it on one worker thread after an 800 ms settle delay and emit `CalibrationResult`/`CalibrationFailed`. Preserve `run_startup_calibration` unchanged for desktop mode. The manual command uses the same coordinator and returns `calibration-busy` if one is active.
 
-- [ ] **Step 4: Run focused tests and CLI dry runs**
+- [x] **Step 4: Run focused tests and CLI dry runs**
 
 Run: `cargo test --all-features browser::commands`
 
@@ -514,7 +514,7 @@ Run: `cargo run -- --dry-run`
 
 Expected: existing desktop dry-run still succeeds.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/browser src/enums/messages.rs src/autocalibrate.rs src/bin/swyh-rs-cli.rs src/utils/commandline.rs

@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod auth;
 pub mod bridge;
+pub mod calibration;
 pub mod commands;
 pub mod mode;
 pub mod protocol;

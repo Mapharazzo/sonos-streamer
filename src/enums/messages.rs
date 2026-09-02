@@ -1,4 +1,7 @@
-use crate::{openhome::rendercontrol::Renderer, server::streaming_server::StreamerFeedBack};
+use crate::{
+    browser::commands::BrowserCommand, openhome::rendercontrol::Renderer,
+    server::streaming_server::StreamerFeedBack,
+};
 
 #[derive(Debug, Clone)]
 pub enum MessageType {
@@ -8,4 +11,5 @@ pub enum MessageType {
     CaptureAborted,
     /// Round-trip latency in milliseconds (Barker pulse detected on input).
     LatencyResult(u64),
+    BrowserCommand(BrowserCommand),
 }
