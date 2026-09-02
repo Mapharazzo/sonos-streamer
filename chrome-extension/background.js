@@ -1,5 +1,11 @@
-import { cleanupTransition, normalizePlexOrigin, validateCastRequest } from './shared/background-state.js';
-import { initialSessionState, reduceSession } from './shared/session-state.js';
+import { normalizePlexOrigin, validateCastRequest } from './shared/background-state.js';
+import {
+  applyCalibration,
+  effectiveDelay,
+  initialSessionState,
+  reduceSession,
+  terminalCleanup,
+} from './shared/session-state.js';
 
 const STORED_FIELDS = ['pairingToken', 'selectedRendererId', 'measuredDelays', 'manualOffsets', 'plexOrigins'];
 const ACTIVE_PHASES = new Set(['starting', 'streaming', 'calibrating']);
@@ -18,6 +24,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== 'object') return undefined;
   if (message.type === 'offscreen-event') {
     void ready.then(() => handleOffscreenEvent(message.event));
+    return undefined;
+  }
+  if (message.type === 'video-delay-status') {
+    void ready.then(() => handleVideoStatus(message.status));
     return undefined;
   }
   if (!['state-request', 'popup-command'].includes(message.type)) return undefined;
@@ -76,6 +86,7 @@ async function handlePopupMessage(message) {
       });
       return publicState();
     case 'set-offset':
+      await applyManualOffset(message.milliseconds);
       await sendOffscreen({
         type: 'browser-command',
         commandType: 'set-manual-offset',
@@ -177,26 +188,38 @@ export async function startCapture(tabId, rendererId) {
 }
 
 export async function stopCapture(reason = 'stopped') {
-  const transition = cleanupTransition(session, reason);
+  const transition = terminalCleanup(session, reason);
   session = transition.state;
-  if (!transition.shouldCleanup) return publicState();
+  if (transition.effects.length === 0) return publicState();
+  const capturedTabId = session.tabId;
   broadcastState();
 
-  try {
-    if (session.connected && session.paired) {
-      await sendOffscreen({
-        type: 'browser-command',
-        commandType: 'stop',
-        requestId: nextRequestId('stop'),
-      });
+  for (const effect of transition.effects) {
+    if (effect.type === 'best-effort-stop-renderer') {
+      try {
+        if (session.connected && session.paired) {
+          await sendOffscreen({
+            type: 'browser-command',
+            commandType: 'stop',
+            requestId: nextRequestId('stop'),
+          });
+        }
+      } catch {
+        // Teardown must continue even if the bridge is already gone.
+      }
+    } else if (effect.type === 'dispose-audio') {
+      try {
+        await sendOffscreen({ type: 'stop-session' });
+      } catch {
+        // The offscreen document may have already cleaned up its media graph.
+      }
+    } else if (effect.type === 'dispose-video' && Number.isInteger(capturedTabId)) {
+      try {
+        await chrome.tabs.sendMessage(capturedTabId, { type: 'video-delay:stop' });
+      } catch {
+        // Navigation or tab removal may have already destroyed the content script.
+      }
     }
-  } catch {
-    // Teardown must continue even if the bridge is already gone.
-  }
-  try {
-    await sendOffscreen({ type: 'stop-session' });
-  } catch {
-    // The offscreen document may have already been destroyed or disconnected.
   }
 
   session = {
@@ -207,6 +230,7 @@ export async function stopCapture(reason = 'stopped') {
     tabId: null,
     cleanupPending: false,
     cleanupReason: reason,
+    videoStatus: 'inactive',
   };
   broadcastState();
   return publicState();
@@ -240,6 +264,32 @@ async function handleOffscreenEvent(event) {
   }
 
   const wasActive = ACTIVE_PHASES.has(session.phase);
+  const isTerminal =
+    event.type === 'bridge-disconnected' ||
+    (event.type === 'error' && event.terminal) ||
+    (event.type === 'stream-state' && ['ended', 'stopped'].includes(event.state));
+  if (isTerminal && wasActive) {
+    if (event.message) session = { ...session, warning: event.message };
+    await stopCapture(event.type === 'bridge-disconnected' ? 'socket-lost' : 'renderer-ended');
+    return;
+  }
+
+  if (event.type === 'calibration-result') {
+    measuredDelays = { ...measuredDelays, [event.rendererId]: event.milliseconds };
+    await chrome.storage.local.set({ measuredDelays });
+    if (event.rendererId === session.selectedRendererId && ACTIVE_PHASES.has(session.phase)) {
+      const result = applyCalibration(session, { latencyMs: event.milliseconds });
+      session = result.state;
+      await runSessionEffects(result.effects);
+    }
+    broadcastState();
+    return;
+  }
+
+  if (event.type === 'calibration-failed' && !ACTIVE_PHASES.has(session.phase)) return;
+  if (event.type === 'calibration-started' && !ACTIVE_PHASES.has(session.phase)) return;
+  if (event.type === 'stream-state' && event.state === 'started' && session.phase !== 'starting') return;
+
   session = { ...reduceSession(session, event), cleanupPending: session.cleanupPending };
 
   if (event.type === 'hello-ok') {
@@ -253,24 +303,61 @@ async function handleOffscreenEvent(event) {
       commandType: 'get-state',
       requestId: nextRequestId('state'),
     });
-  } else if (event.type === 'calibration-result' && event.rendererId) {
-    measuredDelays = { ...measuredDelays, [event.rendererId]: event.milliseconds };
-    await chrome.storage.local.set({ measuredDelays });
   } else if (event.type === 'manual-offset-set' && session.selectedRendererId) {
     manualOffsets = { ...manualOffsets, [session.selectedRendererId]: event.milliseconds };
     await chrome.storage.local.set({ manualOffsets });
+    if (ACTIVE_PHASES.has(session.phase)) await sendCurrentVideoDelay();
+  } else if (event.type === 'stream-state' && event.state === 'started') {
+    await sendCurrentVideoDelay();
+  } else if (event.type === 'calibration-failed') {
+    await sendCurrentVideoDelay();
   }
 
-  if ((event.type === 'bridge-disconnected' || (event.type === 'error' && event.terminal)) && wasActive) {
-    session = {
-      ...session,
-      phase: 'disconnected',
-      connected: false,
-      tabId: null,
-      cleanupPending: false,
-      cleanupReason: 'bridge-ended',
-    };
+  broadcastState();
+}
+
+async function applyManualOffset(milliseconds) {
+  if (!Number.isInteger(milliseconds) || milliseconds < -5000 || milliseconds > 5000) {
+    throw new Error('Manual adjustment must be a whole number from −5000 to 5000 ms');
   }
+  if (!session.selectedRendererId) throw new Error('Choose a Sonos renderer first');
+  session = { ...session, manualOffsetMs: milliseconds };
+  manualOffsets = { ...manualOffsets, [session.selectedRendererId]: milliseconds };
+  await chrome.storage.local.set({ manualOffsets });
+  if (ACTIVE_PHASES.has(session.phase)) await sendCurrentVideoDelay();
+  broadcastState();
+}
+
+async function runSessionEffects(effects) {
+  for (const effect of effects) {
+    if (effect.type === 'send-video-delay') await sendVideoDelay(effect.delayMs);
+  }
+}
+
+async function sendCurrentVideoDelay() {
+  return sendVideoDelay(effectiveDelay(session.measuredDelayMs, session.manualOffsetMs));
+}
+
+async function sendVideoDelay(milliseconds) {
+  if (!Number.isInteger(session.tabId)) return;
+  try {
+    const status = await chrome.tabs.sendMessage(session.tabId, {
+      type: 'video-delay:set',
+      milliseconds,
+    });
+    handleVideoStatus(status);
+  } catch {
+    handleVideoStatus({
+      status: 'audio-only',
+      code: 'content-script-unavailable',
+      message: 'Video delay is unavailable on this page; audio is still casting',
+    });
+  }
+}
+
+function handleVideoStatus(status) {
+  if (!status || typeof status !== 'object') return;
+  session = reduceSession(session, { type: 'video-delay-status', ...status });
   broadcastState();
 }
 

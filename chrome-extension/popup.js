@@ -78,7 +78,7 @@ function render(nextState) {
   elements.cast.disabled = !pairedWithRenderer || state.phase !== 'idle';
   elements.stop.disabled = !['starting', 'streaming', 'calibrating'].includes(state.phase);
   elements.calibrate.disabled = state.phase !== 'streaming';
-  elements.applyOffset.disabled = !state.connected || !state.paired;
+  elements.applyOffset.disabled = !state.connected || !state.paired || !state.selectedRendererId;
 }
 
 function renderRenderers() {

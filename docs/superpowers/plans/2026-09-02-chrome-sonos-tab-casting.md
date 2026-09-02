@@ -957,7 +957,7 @@ git commit -m "feat(extension): support YouTube and Plex video delay"
 - Produces: `effectiveDelay(measuredMs, manualOffsetMs) -> 0..5000`.
 - Produces: one shared terminal cleanup transition for Stop, track end, tab close, socket loss, and fatal protocol errors.
 
-- [ ] **Step 1: Write failing calibration and cleanup integration tests**
+- [x] **Step 1: Write failing calibration and cleanup integration tests**
 
 ```javascript
 test('calibration result persists raw measurement and sends clamped effective delay', () => {
@@ -974,25 +974,25 @@ test('socket loss stops renderer intent, capture, and overlay exactly once', () 
 });
 ```
 
-- [ ] **Step 2: Run and verify integration behavior is missing**
+- [x] **Step 2: Run and verify integration behavior is missing**
 
 Run: `cd chrome-extension && node --test tests/integration-state.test.js`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Wire automatic/manual calibration and terminal paths**
+- [x] **Step 3: Wire automatic/manual calibration and terminal paths**
 
 When Rust reports stream started, show calibrating state; when raw latency arrives, persist it under the renderer ID, combine with manual offset, and send `video-delay:set` to the captured tab. The Calibrate button sends only the Rust command. Offset changes recompute immediately without recalibration and send the protocol's `set-manual-offset` telemetry command.
 
 Calibration timeout uses the last successful measurement or zero and raises a nonterminal warning. Stop/socket/track/tab terminal events call one idempotent effect runner that best-effort stops the renderer before closing the bridge, stops tracks/context, tells the content script to restore video, and clears active IDs.
 
-- [ ] **Step 4: Run all extension tests**
+- [x] **Step 4: Run all extension tests**
 
 Run: `cd chrome-extension && node --test tests/*.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension

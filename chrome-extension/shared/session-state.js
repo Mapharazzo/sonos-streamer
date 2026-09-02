@@ -9,6 +9,8 @@ export function initialSessionState() {
     measuredDelayMs: 0,
     manualOffsetMs: 0,
     warning: null,
+    videoStatus: 'inactive',
+    videoWarning: null,
     counters: { receivedPackets: 0, droppedPackets: 0 },
   };
 }
@@ -53,6 +55,22 @@ export function reduceSession(state, event) {
       return { ...state, phase: event.terminal ? 'failed' : state.phase, warning: event.message };
     case 'capture-started':
       return { ...state, tabId: event.tabId };
+    case 'video-delay-status':
+      {
+        const isFallback =
+          event.status === 'error' ||
+          (event.status === 'audio-only' &&
+            !['waiting-for-video', 'stopped', 'not-started'].includes(event.code));
+        const videoWarning = isFallback
+          ? event.message ?? 'Video delay unavailable; audio is still casting'
+          : null;
+        const warning = isFallback
+          ? videoWarning
+          : state.warning === state.videoWarning
+            ? null
+            : state.warning;
+        return { ...state, videoStatus: event.status, videoWarning, warning };
+      }
     case 'bridge-disconnected':
       return {
         ...state,
@@ -64,4 +82,46 @@ export function reduceSession(state, event) {
     default:
       return state;
   }
+}
+
+export function effectiveDelay(measuredMs, manualOffsetMs) {
+  if (!Number.isFinite(measuredMs) || !Number.isFinite(manualOffsetMs)) {
+    throw new TypeError('Delay values must be finite');
+  }
+  return Math.max(0, Math.min(5000, Math.round(measuredMs) + Math.round(manualOffsetMs)));
+}
+
+export function applyCalibration(state, { latencyMs }) {
+  if (!Number.isInteger(latencyMs) || latencyMs < 0) {
+    throw new TypeError('Calibration latency must be a non-negative integer');
+  }
+  const nextState = {
+    ...state,
+    phase: 'streaming',
+    measuredDelayMs: latencyMs,
+    warning: null,
+  };
+  return {
+    state: nextState,
+    effects: [
+      {
+        type: 'send-video-delay',
+        delayMs: effectiveDelay(nextState.measuredDelayMs, nextState.manualOffsetMs),
+      },
+    ],
+  };
+}
+
+export function terminalCleanup(state, reason) {
+  const active = ['starting', 'streaming', 'calibrating'].includes(state.phase);
+  if (!active || state.cleanupPending) return { state, effects: [] };
+  return {
+    state: { ...state, phase: 'stopping', cleanupPending: true, cleanupReason: reason },
+    effects: [
+      { type: 'best-effort-stop-renderer' },
+      { type: 'stop-media-tracks' },
+      { type: 'dispose-audio' },
+      { type: 'dispose-video' },
+    ],
+  };
 }
