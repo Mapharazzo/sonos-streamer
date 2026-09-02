@@ -372,7 +372,7 @@ git commit -m "feat(browser): publish decoded tab PCM"
 - Produces: `BrowserBridge::spawn(config, command_tx, event_rx) -> io::Result<BrowserBridgeHandle>`.
 - Produces: `BrowserBridgeHandle::local_addr()` and idempotent `shutdown()`.
 
-- [ ] **Step 1: Write failing bridge lifecycle tests**
+- [x] **Step 1: Write failing bridge lifecycle tests**
 
 ```rust
 #[test]
@@ -395,13 +395,13 @@ fn second_authenticated_producer_is_rejected_until_first_disconnects() {
 }
 ```
 
-- [ ] **Step 2: Run and verify bridge tests fail**
+- [x] **Step 2: Run and verify bridge tests fail**
 
 Run: `cargo test --all-features browser::bridge`
 
 Expected: FAIL because the bridge and harness do not exist.
 
-- [ ] **Step 3: Implement the bounded synchronous connection loop**
+- [x] **Step 3: Implement the bounded synchronous connection loop**
 
 ```rust
 pub struct BrowserBridgeConfig {
@@ -420,13 +420,13 @@ pub struct BrowserBridgeHandle {
 
 Use `accept_hdr_with_config` to require path `/browser/v1`, validate the Origin scheme, and cap WebSocket messages at 64 KiB/text and 64 KiB/binary. Set a short TCP read timeout. In one loop: read at most one incoming message, publish valid binary audio only after `hello-ok`, forward commands, drain outgoing events, respond to ping/close, and observe shutdown. Guard the authenticated producer with an atomic compare/exchange that is always released by a connection guard's `Drop`.
 
-- [ ] **Step 4: Run bridge tests including shutdown/reconnect**
+- [x] **Step 4: Run bridge tests including shutdown/reconnect**
 
 Run: `cargo test --all-features browser::bridge`
 
 Expected: PASS with no leaked listener threads.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/browser
