@@ -661,7 +661,7 @@ git commit -m "feat(extension): scaffold protocol and session state"
 - Produces: offscreen runtime messages `bridge-connect`, `start-capture`, `stop-session`, and `browser-command`.
 - Produces: state/event broadcasts to the service worker and popup.
 
-- [ ] **Step 1: Write failing packetization/backpressure tests**
+- [x] **Step 1: Write failing packetization/backpressure tests**
 
 ```javascript
 test('packetizer emits exactly 960 interleaved stereo frames', () => {
@@ -681,13 +681,13 @@ test('high websocket backlog drops new live input', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests and verify missing implementation**
+- [x] **Step 2: Run tests and verify missing implementation**
 
 Run: `cd chrome-extension && node --test tests/pcm.test.js tests/backpressure.test.js`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement packetizer and audio/offscreen lifecycle**
+- [x] **Step 3: Implement packetizer and audio/offscreen lifecycle**
 
 ```javascript
 export function floatToS16(value) {
@@ -698,13 +698,13 @@ export function floatToS16(value) {
 
 The worklet must only copy each 128-frame render quantum to its `MessagePort`; it performs no WebSocket work. The offscreen document creates `AudioContext({sampleRate: 48000})`, loads the local worklet, creates an `AudioWorkletNode` with zero outputs as the graph sink, packetizes worklet messages, and sends only below the backlog threshold. It owns the single WebSocket, authenticates before enabling audio, drains Rust events while capture continues, and tears down tracks/context/socket idempotently.
 
-- [ ] **Step 4: Run all extension pure tests**
+- [x] **Step 4: Run all extension pure tests**
 
 Run: `cd chrome-extension && node --test tests/*.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension
