@@ -533,7 +533,7 @@ git commit -m "feat(browser): control Sonos from browser sessions"
 - Produces: `run_server_instance(server, wd, feedback_tx, shutdown_rx)` with deterministic test shutdown; production `run_server` wraps it.
 - Proves: authenticated WebSocket PCM reaches a simulated Sonos HTTP GET as valid non-silent WAV bytes.
 
-- [ ] **Step 1: Write the failing end-to-end integration test**
+- [x] **Step 1: Write the failing end-to-end integration test**
 
 ```rust
 #[test]
@@ -553,17 +553,17 @@ fn browser_pcm_is_served_as_wav_to_http_consumer() {
 }
 ```
 
-- [ ] **Step 2: Run and confirm production server cannot yet shut down in a test**
+- [x] **Step 2: Run and confirm production server cannot yet shut down in a test**
 
 Run: `cargo test --all-features --test browser_bridge_stream -- --nocapture`
 
 Expected: FAIL because `run_server_instance` and the full harness are absent.
 
-- [ ] **Step 3: Add deterministic server injection/shutdown and complete the harness**
+- [x] **Step 3: Add deterministic server injection/shutdown and complete the harness**
 
 Refactor request handling without changing headers or production threading. The injected server loop uses `recv_timeout` and checks `shutdown_rx`; request worker handles retain existing behavior. The harness binds both servers to port 0, inserts a test renderer stream client through a real HTTP GET, sends repeated PCM packets until the consumer has bytes, then closes WebSocket, HTTP, bridge, and server threads.
 
-- [ ] **Step 4: Run integration and all Rust tests**
+- [x] **Step 4: Run integration and all Rust tests**
 
 Run: `cargo test --all-features --test browser_bridge_stream -- --nocapture`
 
@@ -573,7 +573,7 @@ Run: `cargo test --all-features`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server/streaming_server.rs tests/browser_bridge_stream.rs

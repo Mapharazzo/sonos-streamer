@@ -11,7 +11,7 @@ use crate::{
     utils::rwstream::ChannelStream,
     utils::ui_logger::{LogCategory, ui_log},
 };
-use crossbeam_channel::{Sender, bounded, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded, never, unbounded};
 use ecow::EcoString;
 use log::debug;
 use std::io::Cursor;
@@ -62,70 +62,75 @@ pub fn run_server(
         );
         panic!("Can't start server thread: {e}");
     }));
+    run_server_instance(server, wd, feedback_tx.clone(), never());
+}
+
+pub fn run_server_instance(
+    server: Arc<Server>,
+    wd: WavData,
+    feedback_tx: Sender<MessageType>,
+    shutdown_rx: Receiver<()>,
+) {
     let mut handles = Vec::new();
-    // always have two threads ready to serve new requests
-    for _ in 0..2 {
-        let server = server.clone();
-        let feedback_tx_c = feedback_tx.clone();
-        handles.push(std::thread::spawn(move || {
-            for rq in server.incoming_requests() {
-                // start streaming in a new thread and continue serving new requests
-                let feedback_tx_c = feedback_tx_c.clone();
-                std::thread::spawn(move || {
-                    debug!(
-                        "{:?} {} from {}",
-                        *rq.method(),
-                        rq.url(),
-                        rq.remote_addr().unwrap()
-                    );
-                    #[cfg(debug_assertions)]
-                    dump_rq_headers(&rq);
-                    let url_path = rq.url().split('?').next().unwrap_or(rq.url()).to_string();
-                    if url_path == "/latency/trigger" && *rq.method() == Method::Get {
-                        latency_trigger_get(rq);
-                        return;
-                    }
-                    // create fresh streaming context from config info for each new streaming request
-                    // as some parameters may have changed
-                    let mut streaming_ctx = StreamingContext::from_config();
-                    // parse the GET request and update context
-                    streaming_ctx.set_remote_addr(&rq);
-                    // update context from WavData
-                    streaming_ctx.set_sample_data(wd);
-                    //  - decode streaming query params if present
-                    let sp = StreamingParams::from_query_string(rq.url());
-                    // - check for valid request uri
-                    if sp.path.is_none() {
-                        return bad_request(&streaming_ctx, rq);
-                    }
-                    // - update streaming context from querystring (if present), this completes the context
-                    streaming_ctx.update_format(&sp);
-                    debug!("{streaming_ctx:?}");
-                    // handle response, streaming if GET, headers only otherwise
-                    match *rq.method() {
-                        Method::Get => {
-                            streaming_request(&streaming_ctx, &feedback_tx_c, rq);
-                        }
-                        Method::Head => {
-                            head_request(&streaming_ctx, rq);
-                        }
-                        _ => {
-                            invalid_request(&streaming_ctx, rq);
-                        }
-                    }
-                });
+    loop {
+        if shutdown_rx.try_recv().is_ok() {
+            break;
+        }
+        match server.recv_timeout(Duration::from_millis(25)) {
+            Ok(Some(request)) => {
+                let request_feedback = feedback_tx.clone();
+                handles.push(thread::spawn(move || {
+                    handle_request(request, wd, &request_feedback);
+                }));
             }
-        }));
+            Ok(None) => {}
+            Err(error) => {
+                ui_log(
+                    LogCategory::Error,
+                    &format!("HTTP server receive error: {error}"),
+                );
+                break;
+            }
+        }
     }
 
-    for h in handles {
-        h.join().unwrap_or_else(|e| {
+    for handle in handles {
+        if let Err(error) = handle.join() {
             ui_log(
                 LogCategory::Error,
-                &format!("Server thread ended with error {e:?}"),
+                &format!("Server request thread ended with error {error:?}"),
             );
-            panic!("{e:?}");
-        });
+        }
+    }
+}
+
+fn handle_request(rq: tiny_http::Request, wd: WavData, feedback_tx: &Sender<MessageType>) {
+    debug!(
+        "{:?} {} from {}",
+        *rq.method(),
+        rq.url(),
+        rq.remote_addr().unwrap()
+    );
+    #[cfg(debug_assertions)]
+    dump_rq_headers(&rq);
+    let url_path = rq.url().split('?').next().unwrap_or(rq.url()).to_string();
+    if url_path == "/latency/trigger" && *rq.method() == Method::Get {
+        latency_trigger_get(rq);
+        return;
+    }
+    let mut streaming_ctx = StreamingContext::from_config();
+    streaming_ctx.set_remote_addr(&rq);
+    streaming_ctx.set_sample_data(wd);
+    let sp = StreamingParams::from_query_string(rq.url());
+    if sp.path.is_none() {
+        return bad_request(&streaming_ctx, rq);
+    }
+    streaming_ctx.update_format(&sp);
+    debug!("{streaming_ctx:?}");
+    match *rq.method() {
+        Method::Get => streaming_request(&streaming_ctx, feedback_tx, rq),
+        Method::Head => head_request(&streaming_ctx, rq),
+        _ => invalid_request(&streaming_ctx, rq),
     }
 }
 

@@ -379,6 +379,11 @@ impl Configuration {
     }
 
     fn get_arg_config_path() -> Option<PathBuf> {
+        if let Some(path) = std::env::var_os("SWYH_RS_CONFIGFILE") {
+            let path = PathBuf::from(path);
+            println!("ENV override configfile (SWYH_RS_CONFIGFILE): {path:?}");
+            return Some(path);
+        }
         let mut argparser = Parser::from_env();
         let mut path = None;
         while let Some(arg) = argparser.next().unwrap() {
