@@ -783,7 +783,7 @@ git commit -m "feat(extension): add casting controls and capture lifecycle"
 - Produces: `TimedFrameQueue({release, maxFrames, maxBytes})` with `enqueue`, `takeDue`, `setDelay`, `clear`, `length`, and `bytes`.
 - Produces: `chooseFramePlan({sourceWidth, sourceHeight, fps, delayMs, maxBytes}) -> FramePlan | null`.
 
-- [ ] **Step 1: Write failing queue timing and budget tests**
+- [x] **Step 1: Write failing queue timing and budget tests**
 
 ```javascript
 test('delay reduction retires stale frames and releases superseded resources', () => {
@@ -804,23 +804,23 @@ test('resource plan downscales but never below 640x360', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests and verify modules are absent**
+- [x] **Step 2: Run tests and verify modules are absent**
 
 Run: `cd chrome-extension && node --test tests/frame-queue.test.js tests/resource-budget.test.js`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement generic resources without DOM/WebGL dependencies**
+- [x] **Step 3: Implement generic resources without DOM/WebGL dependencies**
 
 Queue each entry as `{resource, capturedAt, dueAt, bytes}`. `takeDue(now)` returns only the newest due resource and releases all earlier due resources. `setDelay(newDelay)` shifts every `dueAt` by the exact delta. `clear()` releases every queued resource once. Budgeting uses 4 bytes/pixel, `ceil(fps * delayMs / 1000) + 2` frames, a maximum source of 1920x1080, proportional downscale, and returns `null` if the required size falls below 640x360.
 
-- [ ] **Step 4: Run queue tests**
+- [x] **Step 4: Run queue tests**
 
 Run: `cd chrome-extension && node --test tests/frame-queue.test.js tests/resource-budget.test.js`
 
 Expected: PASS including zero delay, negative requested delay clamp, cap overflow, and idempotent clear cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension/video chrome-extension/tests
