@@ -1015,7 +1015,7 @@ git commit -m "feat(extension): synchronize calibration and cleanup"
 - Produces: deterministic `dist/sonos-tab-caster.zip` excluded from git.
 - Produces: exact Windows setup and evidence capture instructions.
 
-- [ ] **Step 1: Write a failing verifier test**
+- [x] **Step 1: Write a failing verifier test**
 
 ```javascript
 test('verifier rejects remote executable scripts and missing manifest files', async () => {
@@ -1026,19 +1026,19 @@ test('verifier rejects remote executable scripts and missing manifest files', as
 });
 ```
 
-- [ ] **Step 2: Run and confirm verifier is absent**
+- [x] **Step 2: Run and confirm verifier is absent**
 
 Run: `cd chrome-extension && node --test tests/verifier.test.js`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement verifier, package script, and docs**
+- [x] **Step 3: Implement verifier, package script, and docs**
 
 The verifier parses the manifest, checks version 3/minimum 116, validates every referenced local file, disallows `http:`/`https:` script/import/worker sources, checks that executable files are repository-owned paths, and rejects source references to third-party delay packages. The package script runs tests and verification first, then creates a zip containing only extension runtime files, excluding tests, tools, `node_modules`, and `dist`.
 
 Document browser-mode startup, one-time token pairing, unpacked loading, microphone selection, hosted/self-hosted Plex permission, diagnostics, audio-only fallback, Stop behavior, and all prototype exclusions. Add the exact ten-step hardware table from the spec with columns for date, commit, Chrome version, Sonos model/version, measured delay, result, and evidence path.
 
-- [ ] **Step 4: Run complete local verification**
+- [x] **Step 4: Run complete local verification**
 
 Run: `cd chrome-extension && npm test && npm run verify && npm run package`
 
@@ -1048,7 +1048,7 @@ Run: `cargo fmt --check && cargo clippy --all-targets --all-features -- -D warni
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .gitignore README.md chrome-extension docs/windows-chrome-sonos-acceptance.md

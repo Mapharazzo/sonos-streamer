@@ -8,6 +8,10 @@
 
 A "Stream-What-You-Hear" implementation written in Rust, MIT licensed.
 
+### Chrome tab-to-Sonos prototype
+
+This branch also contains a Windows-oriented, clean-room Manifest V3 prototype that captures only the Chrome tab selected from its popup, streams that audio through an explicitly running `swyh-rs-cli --browser-source` companion, and delays ordinary YouTube/Plex HTML5 video using measured Sonos latency. It does not launch the companion or capture PC-wide audio. See the [extension setup guide](chrome-extension/README.md) and [Windows hardware acceptance ledger](docs/windows-chrome-sonos-acceptance.md).
+
 ### Contents
 
 - [Why this SWYH alternative ?](#why-this-swyh-alternative-)
