@@ -89,7 +89,7 @@
 - Produces: `Args.browser_source: bool`, `Args.browser_port: Option<u16>`, and `Args.show_browser_token: bool`.
 - Produces: `Configuration.browser_bridge_port: u16` defaulting to 5902 and `Configuration.browser_pairing_token: Option<String>`.
 
-- [ ] **Step 1: Write failing browser-mode tests**
+- [x] **Step 1: Write failing browser-mode tests**
 
 ```rust
 #[test]
@@ -118,7 +118,7 @@ fn parses_browser_source_options() {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm the new API is missing**
+- [x] **Step 2: Run the focused tests and confirm the new API is missing**
 
 Run: `cargo test --all-features browser_mode_is_fixed_stereo_48k_and_wav_16`
 
@@ -126,7 +126,7 @@ Run: `cargo test --all-features parses_browser_source_options`
 
 Expected: FAIL because `BrowserMode`, configuration fields, and CLI options do not exist.
 
-- [ ] **Step 3: Implement the browser mode and parseable CLI fields**
+- [x] **Step 3: Implement the browser mode and parseable CLI fields**
 
 ```rust
 pub const DEFAULT_BROWSER_BRIDGE_PORT: u16 = 5902;
@@ -154,7 +154,7 @@ impl BrowserMode {
 
 Refactor `Args::parse()` to delegate to a testable `parse_args`, preserve every existing switch, add the three browser switches, and add serde defaults/migration for the two configuration fields. In CLI startup, select fixed browser `WavData` before any output-device requirement, but do not yet skip loopback; Task 5 completes startup branching.
 
-- [ ] **Step 4: Run focused and regression tests**
+- [x] **Step 4: Run focused and regression tests**
 
 Run: `cargo test --all-features browser_mode`
 
@@ -166,7 +166,7 @@ Run: `cargo test --all-features`
 
 Expected: all pre-existing tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock src/browser src/lib.rs src/utils/configuration.rs src/utils/commandline.rs src/bin/swyh-rs-cli.rs

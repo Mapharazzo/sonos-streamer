@@ -41,6 +41,9 @@ impl CfgDefaults {
     fn bits_per_sample() -> Option<u16> {
         Some(16)
     }
+    fn browser_bridge_port() -> u16 {
+        crate::browser::DEFAULT_BROWSER_BRIDGE_PORT
+    }
 }
 
 // the configuration struct, read from and saved in config.ini
@@ -54,6 +57,13 @@ struct Config {
 pub struct Configuration {
     #[serde(alias = "ServerPort", default)]
     pub server_port: Option<u16>,
+    #[serde(
+        alias = "BrowserBridgePort",
+        default = "CfgDefaults::browser_bridge_port"
+    )]
+    pub browser_bridge_port: u16,
+    #[serde(alias = "BrowserPairingToken", default)]
+    pub browser_pairing_token: Option<String>,
     #[serde(alias = "AutoResume", default)]
     pub auto_resume: bool,
     #[serde(alias = "SoundCard", default)]
@@ -135,6 +145,8 @@ impl Configuration {
     pub fn new() -> Configuration {
         Configuration {
             server_port: Some(SERVER_PORT),
+            browser_bridge_port: crate::browser::DEFAULT_BROWSER_BRIDGE_PORT,
+            browser_pairing_token: None,
             auto_resume: false,
             sound_source: None,
             sound_source_index: Some(0),
@@ -370,5 +382,18 @@ impl Configuration {
         }
         println!("ARG override configfile (-C): {path:?}");
         path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Configuration;
+
+    #[test]
+    fn missing_browser_fields_use_migration_defaults() {
+        let config: Configuration = toml::from_str("").expect("legacy configuration");
+
+        assert_eq!(config.browser_bridge_port, 5902);
+        assert_eq!(config.browser_pairing_token, None);
     }
 }

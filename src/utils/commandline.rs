@@ -1,5 +1,5 @@
 #![cfg(feature = "cli")]
-use std::net::IpAddr;
+use std::{ffi::OsString, net::IpAddr};
 
 use lexopt::{
     Arg::{Long, Short},
@@ -34,6 +34,9 @@ pub struct Args {
     pub mic_input_name: Option<String>,
     pub latency_threshold_ms: Option<u32>,
     pub no_calibrate: Option<bool>,
+    pub browser_source: bool,
+    pub browser_port: Option<u16>,
+    pub show_browser_token: bool,
 }
 
 impl Args {
@@ -65,6 +68,9 @@ Recognized options:
     -m (--mic) string : input device name substring for latency listener [default input]
     -L (--latency_threshold) u32 : max acceptable round-trip latency (ms) for auto-calibration [500]
     --no_calibrate : skip startup latency calibration
+    --browser-source : receive audio from the local Chrome extension
+    --browser-port u16 : local browser bridge port [5902]
+    --show-browser-token : print the browser pairing token and exit
 "#
         );
         println!("{self:?}");
@@ -73,8 +79,21 @@ Recognized options:
     // parse commandline arguments
 
     pub fn parse(&mut self) -> Result<(), Vec<String>> {
+        self.parse_with(Parser::from_env())
+    }
+
+    pub fn parse_args<I, S>(args: I) -> Result<Self, Vec<String>>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        let mut parsed = Self::default();
+        parsed.parse_with(Parser::from_args(args))?;
+        Ok(parsed)
+    }
+
+    fn parse_with(&mut self, mut argparser: Parser) -> Result<(), Vec<String>> {
         let mut errors: Vec<String> = Vec::new();
-        let mut argparser = Parser::from_env();
         while let Some(arg) = argparser.next().unwrap() {
             match arg {
                 Short('h') | Long("help") => {
@@ -274,6 +293,22 @@ Recognized options:
                 Long("no_calibrate") => {
                     self.no_calibrate = Some(true);
                 }
+                Long("browser-source") => {
+                    self.browser_source = true;
+                }
+                Long("browser-port") => {
+                    if let Ok(port) = argparser.value() {
+                        match port.parse() {
+                            Ok(port) => self.browser_port = Some(port),
+                            Err(error) => {
+                                errors.push(format!("Invalid browser bridge port: {error}."));
+                            }
+                        }
+                    }
+                }
+                Long("show-browser-token") => {
+                    self.show_browser_token = true;
+                }
                 _ => (),
             }
         }
@@ -283,5 +318,26 @@ Recognized options:
         } else {
             Err(errors)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+
+    #[test]
+    fn parses_browser_source_options() {
+        let args =
+            Args::parse_args(["--browser-source", "--browser-port", "6002"]).expect("browser args");
+
+        assert!(args.browser_source);
+        assert_eq!(args.browser_port, Some(6002));
+    }
+
+    #[test]
+    fn parses_show_browser_token_option() {
+        let args = Args::parse_args(["--show-browser-token"]).expect("token args");
+
+        assert!(args.show_browser_token);
     }
 }

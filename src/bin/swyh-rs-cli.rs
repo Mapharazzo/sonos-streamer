@@ -18,6 +18,7 @@ use log::{LevelFilter, debug, error, info};
 use simplelog::{ColorChoice, CombinedLogger, ConfigBuilder, TermLogger, WriteLogger};
 use swyh_rs::{
     autocalibrate::run_startup_calibration,
+    browser::mode::BrowserMode,
     enums::{
         messages::MessageType,
         streaming::{
@@ -160,6 +161,10 @@ fn main() -> Result<(), i32> {
     if args.inject_silence.is_some() {
         config.inject_silence = args.inject_silence;
     }
+    if let Some(port) = args.browser_port {
+        config.browser_bridge_port = port;
+    }
+    let browser_mode = BrowserMode::from_args(&args, &config);
     // set soundsource index or name from args or config
     let audio_devices = get_output_audio_devices();
     // get the index from args or config
@@ -260,8 +265,6 @@ fn main() -> Result<(), i32> {
         }
     }
 
-    let mut audio_output_device = audio_output_device_opt.expect("No default audio device");
-
     // get the list of available networks
     let networks = get_interfaces();
     for ip in &networks {
@@ -292,13 +295,22 @@ fn main() -> Result<(), i32> {
             get_default_address(&mut config)
         }
     };
-    // we need to pass some audio config data to the streaming server
-    let audio_cfg = audio_output_device.default_config();
-    let wd = WavData {
-        sample_format: audio_cfg.sample_format(),
-        sample_rate: audio_cfg.sample_rate(),
-        channels: audio_cfg.channels(),
+    // Browser audio has a fixed transport contract; desktop mode keeps using the selected
+    // loopback device's native format. Task 5 removes the remaining browser-mode device need.
+    let wd = if let Some(mode) = browser_mode {
+        mode.wav_data()
+    } else {
+        let audio_output_device = audio_output_device_opt
+            .as_ref()
+            .expect("No default audio device");
+        let audio_cfg = audio_output_device.default_config();
+        WavData {
+            sample_format: audio_cfg.sample_format(),
+            sample_rate: audio_cfg.sample_rate(),
+            channels: audio_cfg.channels(),
+        }
     };
+    let mut audio_output_device = audio_output_device_opt.expect("No default audio device");
 
     // raise process priority a bit to prevent audio stuttering under cpu load
     raise_priority();
@@ -490,6 +502,13 @@ fn main() -> Result<(), i32> {
     // update config with new args
     sync_config(&config);
     info!("New config: {config:?}");
+
+    // Apply transport overrides only to this process; keep desktop preferences unchanged on disk.
+    if let Some(mode) = browser_mode {
+        mode.apply_session_overrides(&mut config);
+        let mut shared_config = get_config_mut();
+        *shared_config = config.clone();
+    }
 
     // exit here if dry-run
     if args.dry_run.is_some() {
