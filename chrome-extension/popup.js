@@ -5,6 +5,7 @@ const elements = {
   renderer: document.querySelector('#renderer'),
   cast: document.querySelector('#cast'),
   stop: document.querySelector('#stop'),
+  packets: document.querySelector('#packets'),
   measured: document.querySelector('#measured'),
   offset: document.querySelector('#offset'),
   applyOffset: document.querySelector('#apply-offset'),
@@ -72,13 +73,17 @@ function render(nextState) {
   elements.pair.textContent = state.hasStoredToken && !elements.token.value ? 'Connect' : 'Pair';
   renderRenderers();
   elements.measured.value = `${state.measuredDelayMs ?? 0} ms`;
+  elements.packets.value = `${state.counters?.receivedPackets ?? 0} sent, ${state.counters?.droppedPackets ?? 0} dropped`;
   if (document.activeElement !== elements.offset) elements.offset.value = state.manualOffsetMs ?? 0;
 
   const pairedWithRenderer = state.connected && state.paired && Boolean(state.selectedRendererId);
+  const castActive = ['starting', 'streaming', 'calibrating', 'stopping'].includes(state.phase);
+  elements.pair.disabled = castActive;
   elements.cast.disabled = !pairedWithRenderer || state.phase !== 'idle';
   elements.stop.disabled = !['starting', 'streaming', 'calibrating'].includes(state.phase);
   elements.calibrate.disabled = state.phase !== 'streaming';
   elements.applyOffset.disabled = !state.connected || !state.paired || !state.selectedRendererId;
+  elements.renderer.disabled ||= castActive;
 }
 
 function renderRenderers() {

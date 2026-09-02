@@ -1,7 +1,9 @@
 import { BRIDGE_URL, createCommand, createHello, parseServerEvent } from './shared/protocol.js';
-import { PcmPacketizer, shouldDropAudio } from './shared/pcm.js';
+import { PcmPacketizer, audioBacklogAction } from './shared/pcm.js';
+import { GenerationGate } from './shared/generation-gate.js';
 
 const packetizer = new PcmPacketizer(960);
+const captureGate = new GenerationGate();
 
 let socket = null;
 let socketGeneration = 0;
@@ -12,6 +14,9 @@ let mediaSource = null;
 let workletNode = null;
 let backpressureWarningSent = false;
 let endingTrack = null;
+let capturedTabId = null;
+let sentPackets = 0;
+let droppedPackets = 0;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== 'object') return undefined;
@@ -22,10 +27,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       operation = connectBridge(message.token, message.url);
       break;
     case 'start-capture':
-      operation = startCapture(message.streamId);
+      operation = startCapture(message.streamId, message.tabId);
+      break;
+    case 'offscreen-state':
+      operation = Promise.resolve(offscreenState());
       break;
     case 'stop-session':
       operation = stopSession();
+      break;
+    case 'stop-capture':
+      operation = stopCapture();
       break;
     case 'browser-command':
       operation = sendBrowserCommand(message.commandType, message.requestId, message.fields);
@@ -114,31 +125,38 @@ function installSocketHandlers(activeSocket, generation) {
   });
 }
 
-async function startCapture(streamId) {
+async function startCapture(streamId, tabId) {
   if (!authenticated || socket?.readyState !== WebSocket.OPEN) {
     throw new Error('Pair with the local Sonos app before capturing audio');
   }
   if (typeof streamId !== 'string' || streamId.length === 0) {
     throw new Error('A tab capture stream ID is required');
   }
+  if (!Number.isInteger(tabId)) throw new Error('A captured tab ID is required');
 
   await stopCapture();
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      mandatory: {
-        chromeMediaSource: 'tab',
-        chromeMediaSourceId: streamId,
-      },
-    },
-    video: false,
-  });
-
+  const generation = captureGate.begin();
+  let stream = null;
   let context = null;
+  let source = null;
+  let node = null;
   try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        mandatory: {
+          chromeMediaSource: 'tab',
+          chromeMediaSourceId: streamId,
+        },
+      },
+      video: false,
+    });
+    requireCurrentCapture(generation);
+
     context = new AudioContext({ sampleRate: 48000 });
     await context.audioWorklet.addModule('audio-worklet.js');
-    const source = context.createMediaStreamSource(stream);
-    const node = new AudioWorkletNode(context, 'tab-audio-processor', {
+    requireCurrentCapture(generation);
+    source = context.createMediaStreamSource(stream);
+    node = new AudioWorkletNode(context, 'tab-audio-processor', {
       numberOfInputs: 1,
       numberOfOutputs: 0,
       channelCount: 2,
@@ -148,6 +166,7 @@ async function startCapture(streamId) {
     node.port.onmessage = handleAudioQuantum;
     source.connect(node);
     await context.resume();
+    requireCurrentCapture(generation);
 
     mediaStream = stream;
     audioContext = context;
@@ -155,11 +174,19 @@ async function startCapture(streamId) {
     workletNode = node;
     endingTrack = stream.getAudioTracks()[0] ?? null;
     if (endingTrack) endingTrack.onended = () => broadcast({ type: 'capture-ended' });
+    capturedTabId = tabId;
     packetizer.reset();
     backpressureWarningSent = false;
-    broadcast({ type: 'capture-started' });
+    sentPackets = 0;
+    droppedPackets = 0;
+    broadcast({ type: 'capture-started', tabId });
   } catch (error) {
-    stream.getTracks().forEach((track) => track.stop());
+    if (node) {
+      node.port.onmessage = null;
+      node.disconnect();
+    }
+    source?.disconnect();
+    stream?.getTracks().forEach((track) => track.stop());
     if (context && context.state !== 'closed') await context.close();
     throw error;
   }
@@ -178,7 +205,13 @@ function handleAudioQuantum(message) {
   for (const packet of packets) {
     const activeSocket = socket;
     if (!authenticated || activeSocket?.readyState !== WebSocket.OPEN) return;
-    if (shouldDropAudio(activeSocket.bufferedAmount, packet.byteLength)) {
+    const backlogAction = audioBacklogAction(activeSocket.bufferedAmount, packet.byteLength);
+    if (backlogAction === 'reset') {
+      activeSocket.close(1011, 'audio backlog exceeded');
+      return;
+    }
+    if (backlogAction === 'drop') {
+      droppedPackets += 1;
       if (!backpressureWarningSent) {
         backpressureWarningSent = true;
         broadcast({
@@ -186,11 +219,14 @@ function handleAudioQuantum(message) {
           code: 'audio-backpressure',
           message: 'Network backlog is high; live audio packets are being dropped',
         });
+        broadcastAudioStats();
       }
       continue;
     }
     backpressureWarningSent = false;
     activeSocket.send(packet);
+    sentPackets += 1;
+    if ((sentPackets + droppedPackets) % 50 === 0) broadcastAudioStats();
   }
 }
 
@@ -208,6 +244,7 @@ async function stopSession() {
 }
 
 async function stopCapture() {
+  captureGate.cancel();
   packetizer.reset();
   if (workletNode) {
     workletNode.port.onmessage = null;
@@ -222,6 +259,30 @@ async function stopCapture() {
   mediaStream = null;
   audioContext = null;
   endingTrack = null;
+  capturedTabId = null;
+}
+
+function requireCurrentCapture(generation) {
+  if (
+    !captureGate.isCurrent(generation) ||
+    !authenticated ||
+    socket?.readyState !== WebSocket.OPEN
+  ) {
+    throw new Error('Capture setup was cancelled');
+  }
+}
+
+function offscreenState() {
+  return {
+    connected: socket?.readyState === WebSocket.OPEN,
+    authenticated,
+    capturing: mediaStream !== null,
+    tabId: capturedTabId,
+  };
+}
+
+function broadcastAudioStats() {
+  broadcast({ type: 'audio-stats', receivedPackets: sentPackets, droppedPackets });
 }
 
 async function disconnectSocket() {

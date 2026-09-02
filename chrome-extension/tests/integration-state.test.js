@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   applyCalibration,
   effectiveDelay,
+  reconcileCapturedTab,
+  restoreOffscreenSession,
   terminalCleanup,
 } from '../shared/session-state.js';
 
@@ -34,6 +36,31 @@ test('socket loss stops renderer intent, capture, and overlay exactly once', () 
 test('cleanup from an inactive session has no effects', () => {
   const result = terminalCleanup({ ...streamingState(), phase: 'disconnected' }, 'socket-lost');
   assert.deepEqual(result.effects, []);
+});
+
+test('service-worker restart restores an active offscreen capture without exposing a token', () => {
+  const restored = restoreOffscreenSession(
+    { ...streamingState(), phase: 'disconnected', connected: false, paired: false, tabId: null },
+    { connected: true, authenticated: true, capturing: true, tabId: 73 },
+  );
+
+  assert.equal(restored.phase, 'streaming');
+  assert.equal(restored.connected, true);
+  assert.equal(restored.paired, true);
+  assert.equal(restored.tabId, 73);
+  assert.equal('token' in restored, false);
+});
+
+test('worker restart trusts only a tab Chrome still reports as captured', () => {
+  const snapshot = { connected: true, authenticated: true, capturing: true, tabId: 42 };
+
+  assert.equal(reconcileCapturedTab(snapshot, [{ tabId: 42, status: 'active' }]), snapshot);
+  assert.deepEqual(reconcileCapturedTab(snapshot, [{ tabId: 42, status: 'stopped' }]), {
+    connected: true,
+    authenticated: true,
+    capturing: false,
+    tabId: null,
+  });
 });
 
 function streamingState(fields = {}) {

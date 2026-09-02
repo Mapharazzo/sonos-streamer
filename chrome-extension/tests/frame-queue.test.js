@@ -61,3 +61,20 @@ test('clear is idempotent and does not release transferred frames', () => {
 
   assert.deepEqual([...releases], [[2, 1]]);
 });
+
+test('limits can change without clearing compatible queued frames', () => {
+  const released = [];
+  const queue = new TimedFrameQueue({
+    release: (resource) => released.push(resource.id),
+    maxFrames: 4,
+    maxBytes: 100,
+  });
+  queue.enqueue({ id: 1 }, 0, 500, 10);
+  queue.enqueue({ id: 2 }, 1, 500, 10);
+
+  queue.setLimits(1, 100);
+
+  assert.equal(queue.length, 1);
+  assert.deepEqual(released, [1]);
+  assert.equal(queue.takeDue(501).id, 2);
+});

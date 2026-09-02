@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  canChangeRenderer,
+  canStartCast,
   cleanupTransition,
   isSupportedMediaUrl,
   normalizePlexOrigin,
+  terminalEventReason,
   validateCastRequest,
 } from '../shared/background-state.js';
 
@@ -43,4 +46,25 @@ test('terminal capture event requests one idempotent cleanup', () => {
   assert.equal(first.state.phase, 'stopping');
   assert.equal(first.state.cleanupReason, 'track-ended');
   assert.equal(second.shouldCleanup, false);
+});
+
+test('cast and renderer changes are guarded by session phase', () => {
+  assert.equal(canStartCast({ phase: 'idle', cleanupPending: false }), true);
+  assert.equal(canStartCast({ phase: 'starting', cleanupPending: false }), false);
+  assert.equal(canStartCast({ phase: 'idle', cleanupPending: true }), false);
+  assert.equal(canChangeRenderer({ phase: 'streaming' }), false);
+  assert.equal(canChangeRenderer({ phase: 'idle' }), true);
+});
+
+test('renderer lookup and play failures terminate only the active cast attempt', () => {
+  assert.equal(terminalEventReason({ type: 'error', code: 'renderer-not-found', terminal: false }), 'cast-failed');
+  assert.equal(terminalEventReason({ type: 'error', code: 'cast-failed', terminal: false }), 'cast-failed');
+  assert.equal(terminalEventReason({ type: 'warning', code: 'audio-backpressure' }), null);
+});
+
+test('stream startup timeout terminates the active cast attempt', () => {
+  assert.equal(
+    terminalEventReason({ type: 'error', code: 'stream-start-timeout', terminal: false }),
+    'cast-failed',
+  );
 });

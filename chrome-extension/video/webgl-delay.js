@@ -158,12 +158,14 @@ export class WebGlDelaySurface {
       sourceWidth !== this.#sourceWidth ||
       sourceHeight !== this.#sourceHeight ||
       plan.width !== this.#plan.width ||
-      plan.height !== this.#plan.height ||
-      plan.frameCount !== this.#plan.frameCount
+      plan.height !== this.#plan.height
     ) {
       this.#replacePipeline(plan, sourceWidth, sourceHeight, timestamp);
       return;
     }
+
+    this.#queue.setLimits(plan.frameCount, this.#options.maxBytes);
+    this.#plan = plan;
 
     const resource = this.#gpu.capture(this.#video);
     if (!this.#queue.enqueue(resource, timestamp, this.#delayMs, resource.bytes)) {

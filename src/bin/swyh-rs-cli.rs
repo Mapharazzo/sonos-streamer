@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cpal::traits::StreamTrait;
@@ -22,7 +22,10 @@ use swyh_rs::{
         auth::ensure_pairing_token,
         bridge::{BrowserBridge, BrowserBridgeConfig},
         calibration::CalibrationCoordinator,
-        commands::{BrowserCommand, BrowserCommandKind, BrowserPlaybackState, PlaybackAction},
+        commands::{
+            BrowserCommand, BrowserCommandKind, BrowserPlaybackState, PlaybackAction,
+            renderer_list_event, should_accept_stream_feedback,
+        },
         mode::BrowserMode,
         protocol::{RendererSummary, ServerEvent},
     },
@@ -55,6 +58,7 @@ use swyh_rs::{
 };
 
 pub const APP_NAME: &str = "SWYH-RS-CLI";
+const BROWSER_STREAM_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn main() -> Result<(), i32> {
     let shutting_down = Arc::new(AtomicBool::new(false));
@@ -494,6 +498,7 @@ fn main() -> Result<(), i32> {
                     );
                 }
                 MessageType::BrowserCommand(_) => (),
+                MessageType::BrowserProducerDisconnected(_) => (),
             }
         }
         // now check for player names(s) instead of ip addresses
@@ -687,12 +692,30 @@ fn main() -> Result<(), i32> {
                             &format!("New renderer {} at {}", newr.dev_name, newr.remote_addr),
                         );
                         get_renderers_mut().push(*newr);
+                        if browser_mode.is_some() {
+                            let _ = browser_event_tx.send(renderer_list_event(
+                                "renderer-update",
+                                current_renderer_summaries(),
+                            ));
+                        }
                     }
                 }
                 MessageType::PlayerMessage(streamer_feedback) => {
+                    let selected_address = playing
+                        .first()
+                        .map(|renderer| renderer.remote_addr.as_str());
+                    let matching_connection_active = get_clients()
+                        .values()
+                        .any(|client| client.remote_ip == streamer_feedback.remote_ip);
+                    let accept_browser_feedback = should_accept_stream_feedback(
+                        selected_address,
+                        &streamer_feedback.remote_ip,
+                        streamer_feedback.streaming_state,
+                        matching_connection_active,
+                    );
                     match streamer_feedback.streaming_state {
                         StreamingState::Started => {
-                            if browser_mode.is_some() {
+                            if browser_mode.is_some() && accept_browser_feedback {
                                 let id = browser_state.renderer_id().map(str::to_string);
                                 let _ = browser_event_tx.send(ServerEvent::StreamState {
                                     renderer_id: id.clone(),
@@ -712,19 +735,18 @@ fn main() -> Result<(), i32> {
                             }
                         }
                         StreamingState::Ended => {
-                            if browser_mode.is_some() {
+                            if browser_mode.is_some() && accept_browser_feedback {
                                 let _ = browser_event_tx.send(ServerEvent::StreamState {
                                     renderer_id: browser_state.renderer_id().map(str::to_string),
                                     state: "ended".to_string(),
                                 });
+                                browser_state = BrowserPlaybackState::Idle;
+                                playing.clear();
                             }
                             if browser_mode.is_none() && !serve_only {
                                 // first check if the renderer has actually not started streaming again
                                 // as this can happen with Bubble/Nest Audio Openhome
-                                let still_streaming = get_clients().values().any(|chanstrm| {
-                                    chanstrm.remote_ip == streamer_feedback.remote_ip
-                                });
-                                if !still_streaming
+                                if !matching_connection_active
                                     && autoresume
                                     && let Some(r) = get_renderers_mut()
                                         .iter_mut()
@@ -792,7 +814,35 @@ fn main() -> Result<(), i32> {
                         );
                     }
                 }
+                MessageType::BrowserProducerDisconnected(generation) => {
+                    if browser_mode.is_some() && browser_state.on_producer_disconnected(generation)
+                    {
+                        for renderer in &mut playing {
+                            renderer.stop_play();
+                        }
+                        playing.clear();
+                        let _ = browser_event_tx.send(ServerEvent::CastState {
+                            request_id: None,
+                            renderer_id: None,
+                            state: browser_state.phase().to_string(),
+                        });
+                    }
+                }
             }
+        }
+        if browser_mode.is_some()
+            && browser_state.on_start_timeout(Instant::now(), BROWSER_STREAM_START_TIMEOUT)
+        {
+            for renderer in &mut playing {
+                renderer.stop_play();
+            }
+            playing.clear();
+            let _ = browser_event_tx.send(ServerEvent::Error {
+                request_id: None,
+                code: "stream-start-timeout".to_string(),
+                message: "Sonos did not request the audio stream within 10 seconds".to_string(),
+                terminal: false,
+            });
         }
         // handle CTL-C interrupt: shutdown the player(s)
         if shutting_down.load(Ordering::Relaxed) {
@@ -845,6 +895,18 @@ fn renderer_id(renderer: &Renderer) -> String {
     }
 }
 
+fn current_renderer_summaries() -> Vec<RendererSummary> {
+    get_renderers()
+        .iter()
+        .map(|renderer| RendererSummary {
+            id: renderer_id(renderer),
+            name: renderer.dev_name.clone(),
+            model: renderer.dev_model.clone(),
+            address: renderer.remote_addr.clone(),
+        })
+        .collect()
+}
+
 fn handle_browser_command(
     command: BrowserCommand,
     local_addr: &IpAddr,
@@ -857,19 +919,10 @@ fn handle_browser_command(
     let request_id = command.request_id;
     match command.kind {
         BrowserCommandKind::ListRenderers => {
-            let renderers = get_renderers()
-                .iter()
-                .map(|renderer| RendererSummary {
-                    id: renderer_id(renderer),
-                    name: renderer.dev_name.clone(),
-                    model: renderer.dev_model.clone(),
-                    address: renderer.remote_addr.clone(),
-                })
-                .collect();
-            let _ = event_tx.send(ServerEvent::RendererList {
+            let _ = event_tx.send(renderer_list_event(
                 request_id,
-                renderers,
-            });
+                current_renderer_summaries(),
+            ));
         }
         BrowserCommandKind::Cast { renderer_id: id } => {
             let renderer = get_renderers()
@@ -893,7 +946,8 @@ fn handle_browser_command(
             match renderer.play(local_addr, streaminfo) {
                 Ok(()) => {
                     playing.push(renderer);
-                    *state = BrowserPlaybackState::starting(id.clone());
+                    *state =
+                        BrowserPlaybackState::starting(id.clone(), command.producer_generation);
                     let _ = event_tx.send(ServerEvent::CastState {
                         request_id: Some(request_id),
                         renderer_id: Some(id),

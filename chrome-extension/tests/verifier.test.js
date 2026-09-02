@@ -23,6 +23,17 @@ test('verifier accepts the repository extension', async () => {
   assert.deepEqual(await verifyExtension(extensionRoot), []);
 });
 
+test('verifier checks the offscreen document created by the worker', async () => {
+  const bad = await fixtureExtension({
+    popup: undefined,
+    source: "chrome.offscreen.createDocument({ url: 'missing-offscreen.html', reasons: ['USER_MEDIA'] })",
+  });
+
+  const errors = await verifyExtension(bad);
+
+  assert.ok(errors.some((error) => error.includes('missing-offscreen.html')));
+});
+
 async function fixtureExtension({ popup, source }) {
   const root = await mkdtemp(path.join(tmpdir(), 'sonos-extension-verifier-'));
   await mkdir(path.join(root, 'shared'));

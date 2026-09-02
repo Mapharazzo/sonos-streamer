@@ -1,6 +1,28 @@
 const OFFICIAL_MEDIA_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'app.plex.tv']);
 const ACTIVE_CAPTURE_PHASES = new Set(['starting', 'streaming', 'calibrating']);
 
+export function canStartCast(state) {
+  return state.phase === 'idle' && !state.cleanupPending;
+}
+
+export function canChangeRenderer(state) {
+  return !ACTIVE_CAPTURE_PHASES.has(state.phase) && state.phase !== 'stopping';
+}
+
+export function terminalEventReason(event) {
+  if (event?.type === 'bridge-disconnected') return 'socket-lost';
+  if (event?.type === 'stream-state' && ['ended', 'stopped'].includes(event.state)) {
+    return 'renderer-ended';
+  }
+  if (event?.type === 'error') {
+    if (event.terminal) return 'fatal-protocol-error';
+    if (['cast-failed', 'renderer-not-found', 'stream-start-timeout'].includes(event.code)) {
+      return 'cast-failed';
+    }
+  }
+  return null;
+}
+
 export function isSupportedMediaUrl(value, registeredPlexOrigins = []) {
   let url;
   try {

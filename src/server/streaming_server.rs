@@ -73,6 +73,7 @@ pub fn run_server_instance(
 ) {
     let mut handles = Vec::new();
     loop {
+        reap_finished_requests(&mut handles);
         if shutdown_rx.try_recv().is_ok() {
             break;
         }
@@ -100,6 +101,23 @@ pub fn run_server_instance(
                 LogCategory::Error,
                 &format!("Server request thread ended with error {error:?}"),
             );
+        }
+    }
+}
+
+fn reap_finished_requests(handles: &mut Vec<thread::JoinHandle<()>>) {
+    let mut index = 0;
+    while index < handles.len() {
+        if handles[index].is_finished() {
+            let handle = handles.swap_remove(index);
+            if let Err(error) = handle.join() {
+                ui_log(
+                    LogCategory::Error,
+                    &format!("Server request thread ended with error {error:?}"),
+                );
+            }
+        } else {
+            index += 1;
         }
     }
 }
@@ -430,4 +448,26 @@ fn get_std_headers() -> Vec<Header> {
     headers.push(Header::from_bytes(&b"Accept-Ranges"[..], &b"none"[..]).unwrap()); */
 
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{thread, time::Duration};
+
+    use super::reap_finished_requests;
+
+    #[test]
+    fn completed_request_threads_are_reaped() {
+        let mut handles = vec![thread::spawn(|| {})];
+        for _ in 0..100 {
+            if handles[0].is_finished() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        reap_finished_requests(&mut handles);
+
+        assert!(handles.is_empty());
+    }
 }

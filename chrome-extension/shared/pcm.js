@@ -1,4 +1,6 @@
-export const MAX_AUDIO_BACKLOG_BYTES = 256 * 1024;
+const AUDIO_PACKET_BYTES = 3840;
+export const MAX_AUDIO_BACKLOG_BYTES = 4 * AUDIO_PACKET_BYTES;
+export const RESET_AUDIO_BACKLOG_BYTES = 64 * AUDIO_PACKET_BYTES;
 
 export function floatToS16(value) {
   const finite = Number.isFinite(value) ? value : 0;
@@ -7,9 +9,16 @@ export function floatToS16(value) {
 }
 
 export function shouldDropAudio(bufferedAmount, packetBytes) {
-  if (!Number.isFinite(bufferedAmount) || bufferedAmount < 0) return true;
-  if (!Number.isInteger(packetBytes) || packetBytes <= 0) return true;
-  return bufferedAmount + packetBytes > MAX_AUDIO_BACKLOG_BYTES;
+  return audioBacklogAction(bufferedAmount, packetBytes) !== 'send';
+}
+
+export function audioBacklogAction(bufferedAmount, packetBytes) {
+  if (!Number.isFinite(bufferedAmount) || bufferedAmount < 0) return 'drop';
+  if (!Number.isInteger(packetBytes) || packetBytes <= 0) return 'drop';
+  const pendingBytes = bufferedAmount + packetBytes;
+  if (pendingBytes > RESET_AUDIO_BACKLOG_BYTES) return 'reset';
+  if (pendingBytes > MAX_AUDIO_BACKLOG_BYTES) return 'drop';
+  return 'send';
 }
 
 export class PcmPacketizer {

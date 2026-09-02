@@ -1,9 +1,17 @@
-import { normalizePlexOrigin, validateCastRequest } from './shared/background-state.js';
+import {
+  canChangeRenderer,
+  canStartCast,
+  normalizePlexOrigin,
+  terminalEventReason,
+  validateCastRequest,
+} from './shared/background-state.js';
 import {
   applyCalibration,
   effectiveDelay,
   initialSessionState,
+  reconcileCapturedTab,
   reduceSession,
+  restoreOffscreenSession,
   terminalCleanup,
 } from './shared/session-state.js';
 
@@ -63,6 +71,25 @@ async function restoreSettings() {
     session.selectedRendererId = stored.selectedRendererId;
     applyRendererSettings(stored.selectedRendererId);
   }
+  try {
+    if (await chrome.offscreen.hasDocument()) {
+      let snapshot = await sendOffscreen({ type: 'offscreen-state' });
+      if (typeof chrome.tabCapture.getCapturedTabs === 'function') {
+        snapshot = reconcileCapturedTab(snapshot, await chrome.tabCapture.getCapturedTabs());
+      }
+      session = restoreOffscreenSession(session, snapshot);
+      if (!snapshot.capturing) await sendOffscreen({ type: 'stop-capture' });
+      if (session.paired) {
+        await sendOffscreen({
+          type: 'browser-command',
+          commandType: 'get-state',
+          requestId: nextRequestId('restore'),
+        });
+      }
+    }
+  } catch {
+    // A stale offscreen document or closing socket is equivalent to a disconnected session.
+  }
 }
 
 async function handlePopupMessage(message) {
@@ -103,6 +130,9 @@ async function handlePopupMessage(message) {
 }
 
 async function pair(candidateToken) {
+  if (ACTIVE_PHASES.has(session.phase) || session.phase === 'stopping') {
+    throw new Error('Stop the active cast before reconnecting the local app');
+  }
   const token = typeof candidateToken === 'string' && candidateToken.trim()
     ? candidateToken.trim()
     : pairingToken;
@@ -115,6 +145,7 @@ async function pair(candidateToken) {
 }
 
 async function selectRenderer(rendererId) {
+  if (!canChangeRenderer(session)) throw new Error('Stop the active cast before changing rooms');
   if (typeof rendererId !== 'string' || rendererId.length === 0) {
     throw new Error('Choose a Sonos renderer');
   }
@@ -126,6 +157,7 @@ async function selectRenderer(rendererId) {
 }
 
 async function castActiveTab() {
+  if (!canStartCast(session)) throw new Error('A cast is already starting or active');
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !Number.isInteger(tab.id)) throw new Error('No active browser tab was found');
   const errors = validateCastRequest({
@@ -171,7 +203,7 @@ export async function startCapture(tabId, rendererId) {
   try {
     await ensureOffscreenDocument();
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
-    await sendOffscreen({ type: 'start-capture', streamId });
+    await sendOffscreen({ type: 'start-capture', streamId, tabId });
     session = reduceSession(session, { type: 'capture-started', tabId });
     broadcastState();
     await sendOffscreen({
@@ -264,13 +296,10 @@ async function handleOffscreenEvent(event) {
   }
 
   const wasActive = ACTIVE_PHASES.has(session.phase);
-  const isTerminal =
-    event.type === 'bridge-disconnected' ||
-    (event.type === 'error' && event.terminal) ||
-    (event.type === 'stream-state' && ['ended', 'stopped'].includes(event.state));
-  if (isTerminal && wasActive) {
+  const terminalReason = terminalEventReason(event);
+  if (terminalReason && wasActive) {
     if (event.message) session = { ...session, warning: event.message };
-    await stopCapture(event.type === 'bridge-disconnected' ? 'socket-lost' : 'renderer-ended');
+    await stopCapture(terminalReason);
     return;
   }
 
@@ -306,7 +335,6 @@ async function handleOffscreenEvent(event) {
   } else if (event.type === 'manual-offset-set' && session.selectedRendererId) {
     manualOffsets = { ...manualOffsets, [session.selectedRendererId]: event.milliseconds };
     await chrome.storage.local.set({ manualOffsets });
-    if (ACTIVE_PHASES.has(session.phase)) await sendCurrentVideoDelay();
   } else if (event.type === 'stream-state' && event.state === 'started') {
     await sendCurrentVideoDelay();
   } else if (event.type === 'calibration-failed') {

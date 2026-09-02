@@ -80,6 +80,20 @@ export class TimedFrameQueue {
     this.#delayMs = nextDelay;
   }
 
+  setLimits(maxFrames, maxBytes) {
+    if (!Number.isInteger(maxFrames) || maxFrames <= 0) {
+      throw new RangeError('maxFrames must be a positive integer');
+    }
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+      throw new RangeError('maxBytes must be positive');
+    }
+    this.#maxFrames = maxFrames;
+    this.#maxBytes = maxBytes;
+    while (this.#entries.length > this.#maxFrames || this.#bytes > this.#maxBytes) {
+      this.#releaseEntry(this.#entries.shift());
+    }
+  }
+
   clear() {
     const entries = this.#entries;
     this.#entries = [];

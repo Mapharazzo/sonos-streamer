@@ -125,3 +125,28 @@ export function terminalCleanup(state, reason) {
     ],
   };
 }
+
+export function restoreOffscreenSession(state, snapshot) {
+  if (!snapshot?.connected) return state;
+  const paired = snapshot.authenticated === true;
+  const capturing = paired && snapshot.capturing === true && Number.isInteger(snapshot.tabId);
+  return {
+    ...state,
+    connected: true,
+    paired,
+    phase: capturing ? 'streaming' : paired ? 'idle' : 'authenticating',
+    tabId: capturing ? snapshot.tabId : null,
+    cleanupPending: false,
+    cleanupReason: null,
+  };
+}
+
+export function reconcileCapturedTab(snapshot, capturedTabs) {
+  if (!snapshot?.capturing || !Number.isInteger(snapshot.tabId) || !Array.isArray(capturedTabs)) {
+    return snapshot;
+  }
+  const active = capturedTabs.some(
+    (capture) => capture?.tabId === snapshot.tabId && ['pending', 'active'].includes(capture.status),
+  );
+  return active ? snapshot : { ...snapshot, capturing: false, tabId: null };
+}

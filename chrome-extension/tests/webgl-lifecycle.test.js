@@ -51,6 +51,19 @@ test('context loss falls back to the source video', () => {
   assert.equal(fake.fallbacks.at(-1).code, 'webgl-context-lost');
 });
 
+test('changing delay preserves the compatible GPU pipeline and queued textures', () => {
+  const fake = makeSurfaceHarness();
+  fake.surface.start(500);
+  fake.deliverFrame(0);
+  fake.deliverFrame(40);
+
+  fake.surface.setDelay(800);
+  fake.deliverFrame(80);
+
+  assert.equal(fake.gpuCreations(), 1);
+  assert.deepEqual(fake.released, []);
+});
+
 function makeSurfaceHarness({ failAllocation = false, originalOpacity = '1' } = {}) {
   const pendingFrames = new Map();
   const pendingAnimationFrames = new Map();
@@ -60,6 +73,7 @@ function makeSurfaceHarness({ failAllocation = false, originalOpacity = '1' } = 
   const fallbacks = [];
   let callbackId = 0;
   let textureId = 0;
+  let gpuCreations = 0;
 
   const video = {
     videoWidth: 1280,
@@ -102,6 +116,7 @@ function makeSurfaceHarness({ failAllocation = false, originalOpacity = '1' } = 
   const surface = new WebGlDelaySurface(video, { container }, {
     createCanvas,
     createGpu() {
+      gpuCreations += 1;
       if (failAllocation) throw new Error('fake allocation failure');
       return {
         capture() {
@@ -134,6 +149,7 @@ function makeSurfaceHarness({ failAllocation = false, originalOpacity = '1' } = 
     released,
     rendered,
     fallbacks,
+    gpuCreations: () => gpuCreations,
     deliverFrame(now) {
       const [id, callback] = pendingFrames.entries().next().value;
       pendingFrames.delete(id);

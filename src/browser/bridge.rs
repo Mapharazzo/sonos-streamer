@@ -3,7 +3,7 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -85,11 +85,13 @@ impl BrowserBridge {
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
         let producer_active = Arc::new(AtomicBool::new(false));
+        let next_producer_generation = Arc::new(AtomicU64::new(1));
         let join = thread::Builder::new()
             .name("browser_bridge".to_string())
             .spawn(move || {
                 let mut connections = Vec::new();
                 while !thread_shutdown.load(Ordering::Acquire) {
+                    reap_finished_connections(&mut connections);
                     match listener.accept() {
                         Ok((stream, _)) => {
                             let connection_config = config.clone();
@@ -97,6 +99,7 @@ impl BrowserBridge {
                             let connection_events = event_rx.clone();
                             let connection_shutdown = Arc::clone(&thread_shutdown);
                             let connection_producer = Arc::clone(&producer_active);
+                            let connection_generation = Arc::clone(&next_producer_generation);
                             if let Ok(join) = thread::Builder::new()
                                 .name("browser_bridge_connection".to_string())
                                 .spawn(move || {
@@ -107,6 +110,7 @@ impl BrowserBridge {
                                         connection_events,
                                         connection_shutdown,
                                         connection_producer,
+                                        connection_generation,
                                     );
                                 })
                             {
@@ -132,20 +136,47 @@ impl BrowserBridge {
     }
 }
 
-struct ProducerLease(Arc<AtomicBool>);
+fn reap_finished_connections(connections: &mut Vec<JoinHandle<()>>) {
+    let mut index = 0;
+    while index < connections.len() {
+        if connections[index].is_finished() {
+            let connection = connections.swap_remove(index);
+            let _ = connection.join();
+        } else {
+            index += 1;
+        }
+    }
+}
+
+struct ProducerLease {
+    active: Arc<AtomicBool>,
+    generation: u64,
+    command_tx: Sender<MessageType>,
+}
 
 impl ProducerLease {
-    fn acquire(active: &Arc<AtomicBool>) -> Option<Self> {
+    fn acquire(
+        active: &Arc<AtomicBool>,
+        next_generation: &AtomicU64,
+        command_tx: &Sender<MessageType>,
+    ) -> Option<Self> {
         active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .ok()
-            .map(|_| Self(Arc::clone(active)))
+            .map(|_| Self {
+                active: Arc::clone(active),
+                generation: next_generation.fetch_add(1, Ordering::Relaxed),
+                command_tx: command_tx.clone(),
+            })
     }
 }
 
 impl Drop for ProducerLease {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        let _ = self
+            .command_tx
+            .send(MessageType::BrowserProducerDisconnected(self.generation));
+        self.active.store(false, Ordering::Release);
     }
 }
 
@@ -156,6 +187,7 @@ fn run_connection(
     event_rx: Receiver<BrowserEvent>,
     shutdown: Arc<AtomicBool>,
     producer_active: Arc<AtomicBool>,
+    next_producer_generation: Arc<AtomicU64>,
 ) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
@@ -181,7 +213,7 @@ fn run_connection(
         .set_read_timeout(Some(CONNECTION_READ_TIMEOUT));
 
     let publisher = BrowserAudioPublisher::new(AudioSession::v1());
-    let mut producer_lease = None;
+    let mut producer_lease: Option<ProducerLease> = None;
 
     while !shutdown.load(Ordering::Acquire) {
         if producer_lease.is_some() {
@@ -206,7 +238,30 @@ fn run_connection(
                     }
                 };
 
-                if producer_lease.is_none() {
+                if let Some(lease) = &producer_lease {
+                    if let Some(command) =
+                        BrowserCommand::from_client_message(message, lease.generation)
+                    {
+                        if command_tx
+                            .send(MessageType::BrowserCommand(command))
+                            .is_err()
+                        {
+                            send_terminal_error(
+                                &mut socket,
+                                "bridge-stopping",
+                                "command receiver unavailable",
+                            );
+                            return;
+                        }
+                    } else {
+                        send_terminal_error(
+                            &mut socket,
+                            "unexpected-hello",
+                            "already authenticated",
+                        );
+                        return;
+                    }
+                } else {
                     let ClientMessage::Hello(hello) = message else {
                         send_terminal_error(&mut socket, "hello-required", "authenticate first");
                         return;
@@ -218,7 +273,11 @@ fn run_connection(
                             return;
                         }
                     };
-                    let Some(lease) = ProducerLease::acquire(&producer_active) else {
+                    let Some(lease) = ProducerLease::acquire(
+                        &producer_active,
+                        &next_producer_generation,
+                        &command_tx,
+                    ) else {
                         send_terminal_error(
                             &mut socket,
                             "producer-busy",
@@ -230,21 +289,6 @@ fn run_connection(
                     if send_event(&mut socket, &ServerEvent::HelloOk { audio: session }).is_err() {
                         return;
                     }
-                } else if let Some(command) = BrowserCommand::from_client_message(message) {
-                    if command_tx
-                        .send(MessageType::BrowserCommand(command))
-                        .is_err()
-                    {
-                        send_terminal_error(
-                            &mut socket,
-                            "bridge-stopping",
-                            "command receiver unavailable",
-                        );
-                        return;
-                    }
-                } else {
-                    send_terminal_error(&mut socket, "unexpected-hello", "already authenticated");
-                    return;
                 }
             }
             Ok(Message::Binary(bytes)) => {
@@ -335,7 +379,9 @@ mod tests {
         stream::MaybeTlsStream,
     };
 
-    use super::{BrowserBridge, BrowserBridgeConfig, BrowserBridgeHandle};
+    use super::{
+        BrowserBridge, BrowserBridgeConfig, BrowserBridgeHandle, reap_finished_connections,
+    };
     use crate::browser::{
         auth::PairingToken,
         commands::{BrowserCommand, BrowserCommandKind, BrowserEvent},
@@ -507,8 +553,21 @@ mod tests {
             BrowserCommand {
                 request_id: "renderers-1".to_string(),
                 kind: BrowserCommandKind::ListRenderers,
+                producer_generation: 1,
             }
         );
+    }
+
+    #[test]
+    fn authenticated_disconnect_is_forwarded_with_its_generation() {
+        let harness = BridgeHarness::start();
+        let socket = harness.authenticated_client();
+        drop(socket);
+
+        assert!(matches!(
+            harness.command_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(crate::enums::messages::MessageType::BrowserProducerDisconnected(1))
+        ));
     }
 
     #[test]
@@ -540,5 +599,19 @@ mod tests {
             result.expect_err("LAN bind must be rejected").kind(),
             std::io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn finished_connection_threads_are_reaped() {
+        let mut handles = vec![thread::spawn(|| {})];
+        handles[0].thread().unpark();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !handles[0].is_finished() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+
+        reap_finished_connections(&mut handles);
+
+        assert!(handles.is_empty());
     }
 }

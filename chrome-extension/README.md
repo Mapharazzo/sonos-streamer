@@ -26,7 +26,7 @@ The second command creates the pairing secret if necessary, prints it once, and 
 .\target\release\swyh-rs-cli.exe --browser-source --mic "Microphone name or unique substring"
 ```
 
-Omit `--mic` to use the Windows default input. Put the microphone close enough to hear the calibration signal. Do not use `--no_calibrate` when testing automatic synchronization. The defaults are HTTP port 5901 for Sonos and loopback WebSocket port 5902 for the extension. If Windows Firewall asks, allow the companion on the private network so Sonos can fetch port 5901; the control bridge itself remains loopback-only.
+Omit `--mic` to use the Windows default input. Put the microphone close enough to hear the calibration signal. Do not use `--no_calibrate` when testing automatic synchronization. The defaults are HTTP port 5901 for Sonos and loopback WebSocket port 5902 for the extension. This prototype extension connects to port 5902, so do not override `--browser-port` during acceptance testing. If Windows Firewall asks, allow the companion on the private network so Sonos can fetch port 5901; the control bridge itself remains loopback-only.
 
 ## Load and pair the unpacked extension
 

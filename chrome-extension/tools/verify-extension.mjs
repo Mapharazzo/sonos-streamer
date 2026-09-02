@@ -159,6 +159,9 @@ function collectSourceReferences(source, file, root) {
     const base = match[0].startsWith('getURL') ? root : path.dirname(file);
     references.add(toPosix(path.relative(root, path.resolve(base, match[1]))));
   }
+  for (const match of source.matchAll(/\bcreateDocument\s*\(\s*\{[\s\S]*?\burl\s*:\s*['"]([^'"]+)['"]/g)) {
+    references.add(toPosix(path.relative(root, path.resolve(root, match[1]))));
+  }
   if (path.extname(file) === '.html') {
     for (const match of source.matchAll(/<(?:script|link)\b[^>]*(?:src|href)\s*=\s*['"]([^'"]+)['"]/gi)) {
       if (/^(?:https?:|data:|#)/i.test(match[1])) continue;
