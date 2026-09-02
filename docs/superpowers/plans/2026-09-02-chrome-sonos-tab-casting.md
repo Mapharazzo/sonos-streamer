@@ -191,7 +191,7 @@ git commit -m "feat(browser): add explicit browser source mode"
 - Produces: `AudioSession::v1() -> AudioSession` as the single fixed session contract used by validation, decoding, and tests.
 - Produces: serde `ClientMessage`, `ServerEvent`, `RendererSummary`, and `AudioSession` types used by Tasks 4–6.
 
-- [ ] **Step 1: Add dependencies and write failing auth/protocol tests**
+- [x] **Step 1: Add dependencies and write failing auth/protocol tests**
 
 Add `getrandom = "0.4"`, `serde_json = "1.0"`, `subtle = "2.6"`, and `tungstenite = "0.30"` to `Cargo.toml`, then write:
 
@@ -222,7 +222,7 @@ fn hello_requires_exact_v1_audio_contract() {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify missing types fail**
+- [x] **Step 2: Run tests and verify missing types fail**
 
 Run: `cargo test --all-features browser::auth`
 
@@ -230,7 +230,7 @@ Run: `cargo test --all-features browser::protocol`
 
 Expected: FAIL because auth and protocol modules do not exist.
 
-- [ ] **Step 3: Implement token and protocol primitives**
+- [x] **Step 3: Implement token and protocol primitives**
 
 ```rust
 pub struct PairingToken([u8; 32]);
@@ -263,7 +263,7 @@ pub enum ClientMessage {
 
 Implement original hex encode/decode helpers, serde rename coverage, maximum manual offset of ±5,000 ms, request-ID length validation, and renderer summary fields `id`, `name`, `model`, and `address`.
 
-- [ ] **Step 4: Run protocol tests and clippy**
+- [x] **Step 4: Run protocol tests and clippy**
 
 Run: `cargo test --all-features browser::auth`
 
@@ -275,7 +275,7 @@ Run: `cargo clippy --all-targets --all-features -- -D warnings`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock src/browser
