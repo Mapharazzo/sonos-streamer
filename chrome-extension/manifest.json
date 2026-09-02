@@ -29,7 +29,7 @@
   "web_accessible_resources": [
     {
       "resources": ["video/*.js", "video/adapters/*.js"],
-      "matches": ["https://www.youtube.com/*", "https://app.plex.tv/*"]
+      "matches": ["http://*/*", "https://*/*"]
     }
   ]
 }

@@ -96,6 +96,7 @@ export class WebGlDelaySurface {
   setDelay(delayMs) {
     this.#delayMs = clampDelay(delayMs);
     this.#queue?.setDelay(this.#delayMs);
+    if (this.#canvas) this.#placement.update?.(this.#canvas, this.#video);
   }
 
   dispose() {

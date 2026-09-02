@@ -901,7 +901,7 @@ git commit -m "feat(extension): render calibrated delayed video"
 - Produces: adapter contract `{matches(location), findVideo(document), placement(video), observe(callback), dispose()}`.
 - Produces: content messages `video-delay:set`, `video-delay:stop`, and status replies `active`/`audio-only`/`error`.
 
-- [ ] **Step 1: Write failing selection and site tests**
+- [x] **Step 1: Write failing selection and site tests**
 
 ```javascript
 test('dominant selection ignores paused thumbnails and chooses largest visible player', () => {
@@ -916,13 +916,13 @@ test('adapters recognize YouTube and hosted or self-hosted Plex', () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify adapter modules fail**
+- [x] **Step 2: Run and verify adapter modules fail**
 
 Run: `cd chrome-extension && node --test tests/adapters.test.js`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement thin site adapters and controller**
+- [x] **Step 3: Implement thin site adapters and controller**
 
 YouTube placement targets the main player container while keeping `.ytp-chrome-*` controls above the overlay. Plex placement uses the nearest stable player container and keeps its control layer above the overlay. Both use `ResizeObserver`, `MutationObserver`, and `fullscreenchange` only to request controller re-evaluation; they do not own texture logic.
 
@@ -930,13 +930,13 @@ The controller waits for an eligible playing video, selects the adapter from the
 
 `content-script.js` dynamically imports only packaged extension URLs. Add static content-script matches for YouTube and `app.plex.tv`; self-hosted registration reuses the same loader.
 
-- [ ] **Step 4: Run all video tests**
+- [x] **Step 4: Run all video tests**
 
 Run: `cd chrome-extension && node --test tests/frame-queue.test.js tests/resource-budget.test.js tests/webgl-lifecycle.test.js tests/adapters.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension
