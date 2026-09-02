@@ -595,7 +595,7 @@ git commit -m "test(browser): verify tab PCM reaches WAV stream"
 - Produces: `initialSessionState()` and `reduceSession(state, event)`.
 - Supplies state shape to background, offscreen, popup, and video tasks.
 
-- [ ] **Step 1: Write failing pure protocol/state tests**
+- [x] **Step 1: Write failing pure protocol/state tests**
 
 ```javascript
 import test from 'node:test';
@@ -619,25 +619,25 @@ test('disconnect resets active cast but keeps pairing state', () => {
 });
 ```
 
-- [ ] **Step 2: Run Node tests and confirm modules are absent**
+- [x] **Step 2: Run Node tests and confirm modules are absent**
 
 Run: `cd chrome-extension && node --test tests/protocol.test.js tests/session-state.test.js`
 
 Expected: FAIL with module-not-found.
 
-- [ ] **Step 3: Implement original shared modules and minimal manifest**
+- [x] **Step 3: Implement original shared modules and minimal manifest**
 
 Manifest permissions must be exactly `activeTab`, `offscreen`, `scripting`, `storage`, and `tabCapture`; host permissions include YouTube, hosted Plex, and localhost WebSocket access, with `optional_host_permissions` for `http://*/*` and `https://*/*` used only through the explicit self-hosted Plex flow. Set background type to `module`, popup path, minimum Chrome 116, and web-accessible local video modules.
 
 Implement strict event parsing that rejects non-objects, unknown terminal protocol versions, invalid renderer arrays, and unbounded strings. The reducer owns `phase`, `connected`, `paired`, `renderers`, `selectedRendererId`, `tabId`, `measuredDelayMs`, `manualOffsetMs`, `warning`, and counters.
 
-- [ ] **Step 4: Run pure tests**
+- [x] **Step 4: Run pure tests**
 
 Run: `cd chrome-extension && node --test tests/protocol.test.js tests/session-state.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension

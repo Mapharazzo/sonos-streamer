@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Sonos Tab Caster",
+  "version": "0.1.0",
+  "description": "Cast the current tab's audio to a local Sonos renderer with calibrated video delay.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "offscreen", "scripting", "storage", "tabCapture"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://app.plex.tv/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Cast tab to Sonos"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://app.plex.tv/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["video/*.js", "video/adapters/*.js"],
+      "matches": ["https://www.youtube.com/*", "https://app.plex.tv/*"]
+    }
+  ]
+}
