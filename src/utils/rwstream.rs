@@ -63,9 +63,7 @@ fn apply_latency_pulse_if_triggered(samples: &mut Vec<f32>) -> bool {
         samples.resize(pulse.len(), 0.0);
     }
     let len_to_overwrite = std::cmp::min(pulse.len(), samples.len());
-    for i in 0..len_to_overwrite {
-        samples[i] = pulse[i];
-    }
+    samples[..len_to_overwrite].copy_from_slice(&pulse[..len_to_overwrite]);
 
     crate::latency::PULSE_INJECTED_AT.store(
         crate::latency::now_ms(),
@@ -105,15 +103,13 @@ fn peak_rms(samples: &[f32]) -> (f32, f32) {
 // #region agent log
 fn agent_log_dither(tag: &str, peak: f32, rms: f32) {
     let n = DITHER_APPLY_COUNT.fetch_add(1, Ordering::Relaxed);
-    if n % 60 == 0 {
+    if n.is_multiple_of(60) {
         let tag_esc = tag.replace('\\', "\\\\").replace('"', "\\\"");
         crate::debug_agent::agent_log(
             "H12",
             "rwstream.rs:dither",
             "dither_applied",
-            &format!(
-                r#"{{"n":{n},"tag":"{tag_esc}","peak":{peak},"rms":{rms}}}"#
-            ),
+            &format!(r#"{{"n":{n},"tag":"{tag_esc}","peak":{peak},"rms":{rms}}}"#),
         );
     }
 }
@@ -308,7 +304,7 @@ impl ChannelStream {
         // #region agent log
         let calls = FILL_LPCM_READ_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
         let bytes = FILL_LPCM_READ_BYTES.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
-        if calls <= 3 || calls % 500 == 0 {
+        if calls <= 3 || calls.is_multiple_of(500) {
             crate::debug_agent::agent_log(
                 "H4",
                 "rwstream.rs:fill_lpcm_buffer",

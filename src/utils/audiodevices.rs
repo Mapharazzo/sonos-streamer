@@ -463,14 +463,14 @@ pub fn log_loopback_capture_stream_started() {
         "Loopback capture stream is active. Route your app's Windows playback output to the same \
          device you selected for capture (VB-Cable: usually CABLE Input), or Sonos will hear silence.",
     );
-    if let Some(ref src) = get_config().sound_source {
-        if src.to_uppercase().contains("CABLE") {
-            ui_log(
-                LogCategory::Info,
-                "VB-Cable hint: the capture device is open now; set your music player output to \
-                 that same playback endpoint so loopback has a signal.",
-            );
-        }
+    if let Some(ref src) = get_config().sound_source
+        && src.to_uppercase().contains("CABLE")
+    {
+        ui_log(
+            LogCategory::Info,
+            "VB-Cable hint: the capture device is open now; set your music player output to \
+             that same playback endpoint so loopback has a signal.",
+        );
     }
 }
 

@@ -1,5 +1,6 @@
 /// fltk `choice` needs escaping the `pipe` character when showing strings
 /// so add this trait for escaping the `|` in &str
+#[allow(dead_code)]
 pub(crate) trait FwSlashPipeEscape {
     fn fw_slash_pipe_escape(self) -> String;
     #[allow(dead_code)]

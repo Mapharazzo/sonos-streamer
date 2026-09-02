@@ -128,7 +128,7 @@ pub fn run_interactive_wizard(mut c: Configuration) -> Result<Configuration, Str
     let formats = ["WAV (recommended for Sonos)", "LPCM", "RF64"];
     let fidx = Select::with_theme(&theme)
         .with_prompt("Streaming format")
-        .items(&formats)
+        .items(formats)
         .default(0)
         .interact()
         .map_err(|e| e.to_string())?;

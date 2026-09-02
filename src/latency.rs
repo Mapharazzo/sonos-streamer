@@ -46,9 +46,9 @@ pub fn arm_latency_response_waiter(reply: Sender<Option<u64>>) {
 
 /// Called from the mic listener when a pulse is detected.
 pub fn complete_latency_measurement(millis: u64) {
-    if let Ok(mut g) = PENDING_LATENCY_REPLY.lock() {
-        if let Some(tx) = g.take() {
-            let _ = tx.send(Some(millis));
-        }
+    if let Ok(mut g) = PENDING_LATENCY_REPLY.lock()
+        && let Some(tx) = g.take()
+    {
+        let _ = tx.send(Some(millis));
     }
 }

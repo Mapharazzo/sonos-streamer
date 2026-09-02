@@ -11,6 +11,7 @@ static F32_TO_I32_SIMD: f32x4 = f32x4::splat(F32_TO_I32);
 /// convert f32 samples to i32 for flac encoding
 /// but scaled to i16 or i24 according to shift (8 or 16)
 /// using SIMD SSE xmm registers (with the wide crate)
+#[allow(dead_code)]
 pub(crate) fn samples_to_i32(f32_samples: &[f32], i32_samples: &mut Vec<i32>, bd: BitDepth) {
     debug_assert!(
         f32_samples.len() & 1 == 0,
