@@ -231,7 +231,7 @@ function handleAudioQuantum(message) {
   }
 }
 
-function sendBrowserCommand(commandType, requestId, fields = {}) {
+async function sendBrowserCommand(commandType, requestId, fields = {}) {
   if (!authenticated || socket?.readyState !== WebSocket.OPEN) {
     throw new Error('The local Sonos app is not paired');
   }
