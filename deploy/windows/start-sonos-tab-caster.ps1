@@ -14,10 +14,19 @@ if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $LogPath = Join-Path $LogDirectory "companion-$Timestamp.log"
+$CompanionArguments = @("--browser-source", "--ip_address", $IpAddress)
 
 "Starting Sonos Tab Caster on $IpAddress; log: $LogPath" | Tee-Object -FilePath $LogPath
-& $Executable --browser-source --ip_address $IpAddress 2>&1 |
-    Tee-Object -FilePath $LogPath -Append
-$ExitCode = $LASTEXITCODE
+$SetupErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & $Executable @CompanionArguments 2>&1 |
+        ForEach-Object { $_.ToString() } |
+        Tee-Object -FilePath $LogPath -Append
+    $ExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $SetupErrorActionPreference
+}
 "Companion exited with code $ExitCode" | Tee-Object -FilePath $LogPath -Append
 exit $ExitCode
