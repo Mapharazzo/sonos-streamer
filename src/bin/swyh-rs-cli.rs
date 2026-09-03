@@ -23,8 +23,8 @@ use swyh_rs::{
         bridge::{BrowserBridge, BrowserBridgeConfig},
         calibration::CalibrationCoordinator,
         commands::{
-            BrowserCommand, BrowserCommandKind, BrowserPlaybackState, PlaybackAction,
-            renderer_list_event, should_accept_stream_feedback,
+            BrowserCommand, BrowserCommandKind, BrowserPlaybackState, BrowserStreamEndDebouncer,
+            PlaybackAction, renderer_list_event, should_accept_stream_feedback,
         },
         mode::BrowserMode,
         protocol::{RendererSummary, ServerEvent},
@@ -59,6 +59,7 @@ use swyh_rs::{
 
 pub const APP_NAME: &str = "SWYH-RS-CLI";
 const BROWSER_STREAM_START_TIMEOUT: Duration = Duration::from_secs(10);
+const BROWSER_STREAM_END_GRACE: Duration = Duration::from_secs(2);
 
 fn main() -> Result<(), i32> {
     let shutting_down = Arc::new(AtomicBool::new(false));
@@ -397,6 +398,7 @@ fn main() -> Result<(), i32> {
     };
     let calibration = CalibrationCoordinator::new();
     let mut browser_state = BrowserPlaybackState::Idle;
+    let mut browser_stream_end = BrowserStreamEndDebouncer::default();
 
     swyh_rs::listener::start_latency_listener(config.input_device.clone());
 
@@ -716,6 +718,7 @@ fn main() -> Result<(), i32> {
                     match streamer_feedback.streaming_state {
                         StreamingState::Started => {
                             if browser_mode.is_some() && accept_browser_feedback {
+                                browser_stream_end.note_started(&streamer_feedback.remote_ip);
                                 let id = browser_state.renderer_id().map(str::to_string);
                                 let _ = browser_event_tx.send(ServerEvent::StreamState {
                                     renderer_id: id.clone(),
@@ -735,13 +738,18 @@ fn main() -> Result<(), i32> {
                             }
                         }
                         StreamingState::Ended => {
-                            if browser_mode.is_some() && accept_browser_feedback {
-                                let _ = browser_event_tx.send(ServerEvent::StreamState {
-                                    renderer_id: browser_state.renderer_id().map(str::to_string),
-                                    state: "ended".to_string(),
-                                });
-                                browser_state = BrowserPlaybackState::Idle;
-                                playing.clear();
+                            if browser_mode.is_some()
+                                && selected_address == Some(&streamer_feedback.remote_ip)
+                            {
+                                if accept_browser_feedback {
+                                    browser_stream_end.note_ended(
+                                        &streamer_feedback.remote_ip,
+                                        Instant::now(),
+                                        BROWSER_STREAM_END_GRACE,
+                                    );
+                                } else {
+                                    browser_stream_end.note_started(&streamer_feedback.remote_ip);
+                                }
                             }
                             if browser_mode.is_none() && !serve_only {
                                 // first check if the renderer has actually not started streaming again
@@ -803,6 +811,12 @@ fn main() -> Result<(), i32> {
                 }
                 MessageType::BrowserCommand(command) => {
                     if browser_mode.is_some() {
+                        if matches!(
+                            &command.kind,
+                            BrowserCommandKind::Cast { .. } | BrowserCommandKind::Stop
+                        ) {
+                            browser_stream_end.clear();
+                        }
                         handle_browser_command(
                             command,
                             &local_addr,
@@ -817,6 +831,7 @@ fn main() -> Result<(), i32> {
                 MessageType::BrowserProducerDisconnected(generation) => {
                     if browser_mode.is_some() && browser_state.on_producer_disconnected(generation)
                     {
+                        browser_stream_end.clear();
                         for renderer in &mut playing {
                             renderer.stop_play();
                         }
@@ -830,9 +845,30 @@ fn main() -> Result<(), i32> {
                 }
             }
         }
+        let selected_address = playing
+            .first()
+            .map(|renderer| renderer.remote_addr.as_str());
+        let selected_connection_active = selected_address.is_some_and(|address| {
+            get_clients()
+                .values()
+                .any(|client| client.remote_ip == address)
+        });
+        if browser_mode.is_some()
+            && browser_stream_end
+                .take_due(Instant::now(), selected_address, selected_connection_active)
+                .is_some()
+        {
+            let _ = browser_event_tx.send(ServerEvent::StreamState {
+                renderer_id: browser_state.renderer_id().map(str::to_string),
+                state: "ended".to_string(),
+            });
+            browser_state = BrowserPlaybackState::Idle;
+            playing.clear();
+        }
         if browser_mode.is_some()
             && browser_state.on_start_timeout(Instant::now(), BROWSER_STREAM_START_TIMEOUT)
         {
+            browser_stream_end.clear();
             for renderer in &mut playing {
                 renderer.stop_play();
             }

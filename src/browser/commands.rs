@@ -75,6 +75,59 @@ pub fn should_accept_stream_feedback(
         && (state == StreamingState::Started || !matching_connection_active)
 }
 
+#[derive(Debug)]
+struct PendingStreamEnd {
+    remote_address: String,
+    deadline: Instant,
+}
+
+#[derive(Debug, Default)]
+pub struct BrowserStreamEndDebouncer {
+    pending: Option<PendingStreamEnd>,
+}
+
+impl BrowserStreamEndDebouncer {
+    pub fn note_ended(&mut self, remote_address: &str, now: Instant, grace: Duration) {
+        self.pending = Some(PendingStreamEnd {
+            remote_address: remote_address.to_string(),
+            deadline: now + grace,
+        });
+    }
+
+    pub fn note_started(&mut self, remote_address: &str) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.remote_address == remote_address)
+        {
+            self.pending = None;
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.pending = None;
+    }
+
+    pub fn take_due(
+        &mut self,
+        now: Instant,
+        selected_address: Option<&str>,
+        matching_connection_active: bool,
+    ) -> Option<String> {
+        let pending = self.pending.as_ref()?;
+        if now < pending.deadline {
+            return None;
+        }
+        let pending = self.pending.take().expect("pending stream end");
+        if selected_address == Some(pending.remote_address.as_str()) && !matching_connection_active
+        {
+            Some(pending.remote_address)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum BrowserPlaybackState {
     Idle,
@@ -213,7 +266,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        BrowserPlaybackState, PlaybackAction, renderer_list_event, should_accept_stream_feedback,
+        BrowserPlaybackState, BrowserStreamEndDebouncer, PlaybackAction, renderer_list_event,
+        should_accept_stream_feedback,
     };
     use crate::browser::protocol::{RendererSummary, ServerEvent};
     use crate::enums::streaming::StreamingState;
@@ -275,6 +329,36 @@ mod tests {
             StreamingState::Ended,
             false,
         ));
+    }
+
+    #[test]
+    fn transient_stream_end_waits_for_reconnect_before_finalizing() {
+        let now = Instant::now();
+        let grace = Duration::from_secs(2);
+        let mut debounce = BrowserStreamEndDebouncer::default();
+        debounce.note_ended("192.0.2.10", now, grace);
+
+        assert_eq!(
+            debounce.take_due(now + Duration::from_secs(1), Some("192.0.2.10"), false),
+            None,
+        );
+        assert_eq!(
+            debounce.take_due(now + grace, Some("192.0.2.10"), true),
+            None,
+        );
+
+        debounce.note_ended("192.0.2.10", now, grace);
+        assert_eq!(
+            debounce.take_due(now + grace, Some("192.0.2.10"), false),
+            Some("192.0.2.10".to_string()),
+        );
+
+        debounce.note_ended("192.0.2.10", now, grace);
+        debounce.note_started("192.0.2.10");
+        assert_eq!(
+            debounce.take_due(now + grace, Some("192.0.2.10"), false),
+            None,
+        );
     }
 
     #[test]
