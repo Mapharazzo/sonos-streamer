@@ -500,7 +500,7 @@ fn main() -> Result<(), i32> {
                     );
                 }
                 MessageType::BrowserCommand(_) => (),
-                MessageType::BrowserProducerDisconnected(_) => (),
+                MessageType::BrowserProducerDisconnected { .. } => (),
             }
         }
         // now check for player names(s) instead of ip addresses
@@ -828,7 +828,11 @@ fn main() -> Result<(), i32> {
                         );
                     }
                 }
-                MessageType::BrowserProducerDisconnected(generation) => {
+                MessageType::BrowserProducerDisconnected { generation, reason } => {
+                    ui_log(
+                        LogCategory::Warning,
+                        &format!("Browser producer {generation} disconnected: {reason}"),
+                    );
                     if browser_mode.is_some() && browser_state.on_producer_disconnected(generation)
                     {
                         browser_stream_end.clear();

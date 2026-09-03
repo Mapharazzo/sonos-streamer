@@ -12,5 +12,8 @@ pub enum MessageType {
     /// Round-trip latency in milliseconds (Barker pulse detected on input).
     LatencyResult(u64),
     BrowserCommand(BrowserCommand),
-    BrowserProducerDisconnected(u64),
+    BrowserProducerDisconnected {
+        generation: u64,
+        reason: String,
+    },
 }

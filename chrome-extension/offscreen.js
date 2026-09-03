@@ -1,6 +1,7 @@
 import { BRIDGE_URL, createCommand, createHello, parseServerEvent } from './shared/protocol.js';
 import { PcmPacketizer, audioBacklogAction } from './shared/pcm.js';
 import { GenerationGate } from './shared/generation-gate.js';
+import { webSocketCloseReason } from './shared/diagnostics.js';
 
 const packetizer = new PcmPacketizer(960);
 const captureGate = new GenerationGate();
@@ -33,7 +34,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       operation = Promise.resolve(offscreenState());
       break;
     case 'stop-session':
-      operation = stopSession();
+      operation = stopSession(message.reason);
       break;
     case 'stop-capture':
       operation = stopCapture();
@@ -55,7 +56,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function connectBridge(token, requestedUrl = BRIDGE_URL) {
   if (typeof token !== 'string' || token.length === 0) throw new Error('A pairing token is required');
   const url = validateBridgeUrl(requestedUrl);
-  await disconnectSocket();
+  await disconnectSocket('bridge reconnect');
   broadcast({ type: 'bridge-connecting' });
 
   const generation = ++socketGeneration;
@@ -237,9 +238,9 @@ function sendBrowserCommand(commandType, requestId, fields = {}) {
   socket.send(JSON.stringify(createCommand(commandType, requestId, fields)));
 }
 
-async function stopSession() {
+async function stopSession(reason = 'ended') {
   await stopCapture();
-  await disconnectSocket();
+  await disconnectSocket(reason);
   broadcast({ type: 'bridge-disconnected' });
 }
 
@@ -285,12 +286,14 @@ function broadcastAudioStats() {
   broadcast({ type: 'audio-stats', receivedPackets: sentPackets, droppedPackets });
 }
 
-async function disconnectSocket() {
+async function disconnectSocket(reason = 'ended') {
   authenticated = false;
   socketGeneration += 1;
   const activeSocket = socket;
   socket = null;
-  if (activeSocket && activeSocket.readyState < WebSocket.CLOSING) activeSocket.close(1000, 'session ended');
+  if (activeSocket && activeSocket.readyState < WebSocket.CLOSING) {
+    activeSocket.close(1000, webSocketCloseReason(reason));
+  }
 }
 
 function validateBridgeUrl(value) {

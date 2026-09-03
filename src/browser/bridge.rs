@@ -152,6 +152,7 @@ struct ProducerLease {
     active: Arc<AtomicBool>,
     generation: u64,
     command_tx: Sender<MessageType>,
+    disconnect_reason: String,
 }
 
 impl ProducerLease {
@@ -167,7 +168,12 @@ impl ProducerLease {
                 active: Arc::clone(active),
                 generation: next_generation.fetch_add(1, Ordering::Relaxed),
                 command_tx: command_tx.clone(),
+                disconnect_reason: "connection ended without a close frame".to_string(),
             })
+    }
+
+    fn set_disconnect_reason(&mut self, reason: impl Into<String>) {
+        self.disconnect_reason = reason.into();
     }
 }
 
@@ -175,7 +181,10 @@ impl Drop for ProducerLease {
     fn drop(&mut self) {
         let _ = self
             .command_tx
-            .send(MessageType::BrowserProducerDisconnected(self.generation));
+            .send(MessageType::BrowserProducerDisconnected {
+                generation: self.generation,
+                reason: self.disconnect_reason.clone(),
+            });
         self.active.store(false, Ordering::Release);
     }
 }
@@ -313,15 +322,31 @@ fn run_connection(
                 let _ = socket.flush();
             }
             Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
-            Ok(Message::Close(_)) => return,
+            Ok(Message::Close(frame)) => {
+                if let Some(lease) = &mut producer_lease {
+                    lease.set_disconnect_reason(frame.map_or_else(
+                        || "peer closed without a reason".to_string(),
+                        |frame| frame.reason.to_string(),
+                    ));
+                }
+                return;
+            }
             Err(WebSocketError::Io(error))
                 if matches!(
                     error.kind(),
                     io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                 ) => {}
             Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => return,
-            Err(_) => return,
+            Err(error) => {
+                if let Some(lease) = &mut producer_lease {
+                    lease.set_disconnect_reason(format!("websocket error: {error}"));
+                }
+                return;
+            }
         }
+    }
+    if let Some(lease) = &mut producer_lease {
+        lease.set_disconnect_reason("browser bridge shutting down");
     }
     let _ = socket.close(None);
 }
@@ -376,6 +401,7 @@ mod tests {
         client::IntoClientRequest,
         connect,
         http::{HeaderValue, StatusCode, header::ORIGIN},
+        protocol::{CloseFrame, frame::coding::CloseCode},
         stream::MaybeTlsStream,
     };
 
@@ -561,12 +587,21 @@ mod tests {
     #[test]
     fn authenticated_disconnect_is_forwarded_with_its_generation() {
         let harness = BridgeHarness::start();
-        let socket = harness.authenticated_client();
+        let mut socket = harness.authenticated_client();
+        socket
+            .close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "session: capture-stopped".into(),
+            }))
+            .expect("close producer");
         drop(socket);
 
         assert!(matches!(
             harness.command_rx.recv_timeout(Duration::from_secs(1)),
-            Ok(crate::enums::messages::MessageType::BrowserProducerDisconnected(1))
+            Ok(crate::enums::messages::MessageType::BrowserProducerDisconnected {
+                generation: 1,
+                reason,
+            }) if reason == "session: capture-stopped"
         ));
     }
 

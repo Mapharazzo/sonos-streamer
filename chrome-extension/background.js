@@ -241,7 +241,7 @@ export async function stopCapture(reason = 'stopped') {
       }
     } else if (effect.type === 'dispose-audio') {
       try {
-        await sendOffscreen({ type: 'stop-session' });
+        await sendOffscreen({ type: 'stop-session', reason });
       } catch {
         // The offscreen document may have already cleaned up its media graph.
       }
