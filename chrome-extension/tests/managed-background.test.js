@@ -4,7 +4,7 @@ import { ManagedBackground } from '../managed-background.js';
 const state = { type: 'state', instanceId: 'i', revision: 1, generation: 1, source: 'chrome', phase: 'idle', rendererId: 'room', renderers: [], measuredDelayMs: 0, manualOffsetMs: 0, capabilities: {} };
 function harness() {
   const calls = [];
-  const chrome = { storage: { local: { set: async () => {} } }, tabs: { query: async () => [{ id: 42, url: 'https://www.youtube.com/watch?v=test' }], sendMessage: async (tab, message) => calls.push(message.type), get: async () => ({ id: 42 }) }, tabCapture: { getMediaStreamId: async () => { calls.push('grant'); return 'grant'; } } };
+  const chrome = { storage: { local: { set: async () => {} } }, tabs: { query: async () => [{ id: 42, url: 'https://www.youtube.com/watch?v=test' }], sendMessage: async (tab, message) => calls.push(message.type), get: async () => ({ id: 42, url: 'https://www.youtube.com/watch?v=test' }) }, tabCapture: { getMediaStreamId: async () => { calls.push('grant'); return 'grant'; } } };
   const engine = async (message) => {
     calls.push(message.type === 'managed-command' ? message.action.type : message.type);
     if (message.type === 'managed-connect') return { connected: true, snapshot: state, capturing: false };
@@ -37,6 +37,28 @@ test('competing Cast calls do not mint two capture grants', async () => {
   const results = await Promise.allSettled([h.background.cast(), h.background.cast()]);
   assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
   assert.equal(h.calls.filter((call) => call === 'grant').length, 1);
+});
+
+test('navigation while prepare-browser is pending cancels setup before audio starts', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  let finishPrepare, preparing;
+  const started = new Promise((resolve) => { preparing = resolve; });
+  const original = h.background.sendOffscreen;
+  h.background.sendOffscreen = async (message) => {
+    if (message.action?.type === 'prepare-browser') {
+      preparing();
+      await new Promise((resolve) => { finishPrepare = resolve; });
+    }
+    return original(message);
+  };
+  const cast = h.background.cast();
+  const cancelled = assert.rejects(cast, /capture-cancelled/);
+  await started;
+  await h.background.tabClosedOrNavigated(42);
+  finishPrepare();
+  await cancelled;
+  assert.equal(h.calls.includes('managed-start'), false);
+  assert.equal(h.calls.includes('start-browser'), false);
 });
 
 test('reload from native controller completes once and never requests capture itself', async () => {

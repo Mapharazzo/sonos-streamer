@@ -61,8 +61,13 @@ struct FakeBackend {
     stopped: usize,
     plays: Vec<(u64, String)>,
     no_device: bool,
+    volume_reads: usize,
 }
 impl Backend for FakeBackend {
+    fn read_volume(&mut self, _: &str) -> Result<u8, &'static str> {
+        self.volume_reads += 1;
+        Ok(37)
+    }
     fn windows_format(&mut self) -> Result<WavData, &'static str> {
         if self.no_device {
             Err("output-device-unavailable")
@@ -118,6 +123,39 @@ fn room(runtime: &mut Runtime<FakeBackend>) {
             address: "127.0.0.1".into(),
         },
     ]));
+}
+
+#[test]
+fn selected_and_restored_room_volume_is_queried_without_a_volume_write() {
+    for restored in [false, true] {
+        let mut runtime = Runtime::new(
+            "test-instance".into(),
+            FakeBackend::default(),
+            Arc::new(AudioHub::new()),
+            Preferences {
+                renderer_id: restored.then(|| "room".into()),
+                ..Preferences::default()
+            },
+            "127.0.0.1:5901".parse().unwrap(),
+        );
+        assert_eq!(runtime.snapshot().volume, None);
+        room(&mut runtime);
+        if !restored {
+            assert_eq!(
+                command(
+                    &mut runtime,
+                    Action::SelectRenderer {
+                        renderer_id: "room".into()
+                    }
+                )
+                .status,
+                Status::Ok
+            );
+        }
+        assert_eq!(runtime.snapshot().volume, Some(37));
+        assert_eq!(runtime.backend().volume_reads, 1);
+        assert_eq!(runtime.backend().opened, 0);
+    }
 }
 
 #[test]

@@ -8,6 +8,7 @@ export class ManagedBackground {
     Object.assign(this, { chrome, ensureOffscreen, sendOffscreen, onState });
     this.token = ''; this.plexOrigins = []; this.snapshot = null; this.connected = false; this.tabId = null; this.warning = null; this.videoTabId = null; this.counters = {};
     this.recoveryTab = null; this.recoveryRunning = false; this.lastBrowserStatus = ''; this.statusPending = false;
+    this.pendingTab = null;
     this.lifecycle = new CaptureLifecycle({
       disposeAudio: () => this.sendOffscreen({ type: 'managed-stop' }),
       disposeVideo: () => this.stopVideo(),
@@ -58,6 +59,9 @@ export class ManagedBackground {
       if (!this.connected || !this.snapshot?.rendererId || this.snapshot.source !== 'chrome' || !['idle', 'failed'].includes(this.snapshot.phase)) throw new Error('Select Chrome and a Sonos room before casting');
       const tab = invokedTab ?? (await this.chrome.tabs.query({ active: true, currentWindow: true }))[0]; check();
       if (!Number.isInteger(tab?.id) || !isSupportedMediaUrl(tab.url, this.plexOrigins)) throw new Error('Open YouTube or Plex in the active tab');
+      const pending = { id: tab.id, url: tab.url };
+      this.pendingTab = pending;
+      try {
       this.recoveryTab = { tabId: tab.id, origin: new URL(tab.url).origin };
       await this.chrome.storage.session?.set({ recoveryTab: this.recoveryTab }); check();
       await this.ensureOffscreen(); check();
@@ -67,6 +71,8 @@ export class ManagedBackground {
       const state = prepared.state;
       this.tabId = tab.id;
       try {
+        const current = await this.chrome.tabs.get(tab.id).catch(() => null); check();
+        if (current?.id !== tab.id || current?.url !== pending.url) throw new Error('tab-changed');
         await this.sendOffscreen({ type: 'managed-start', streamId, tabId: tab.id, leaseId: prepared.leaseId, instanceId: state.instanceId, generation: state.generation }); check();
         await this.command({ type: 'start-browser', leaseId: prepared.leaseId }); check();
       } catch (error) {
@@ -74,6 +80,7 @@ export class ManagedBackground {
         check(); await this.command({ type: 'stop' }).catch(() => {}); throw error;
       }
       return this.publicState();
+      } finally { if (this.pendingTab === pending) this.pendingTab = null; }
     });
   }
   async event(event) {
@@ -105,7 +112,7 @@ export class ManagedBackground {
   }
   async tabClosedOrNavigated(tabId) {
     if (this.recoveryRunning) return;
-    if (tabId !== this.tabId) return;
+    if (tabId !== this.tabId && tabId !== this.pendingTab?.id) return;
     // The old document and video overlay are gone. Server Stop requests audio cleanup.
     this.videoTabId = null;
     if (!this.lifecycle.busy && this.snapshot?.source === 'chrome' && ['starting', 'streaming'].includes(this.snapshot.phase)) await this.command({ type: 'stop' }).catch(() => {});

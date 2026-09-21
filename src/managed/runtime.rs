@@ -39,6 +39,9 @@ pub trait Backend {
         sample_rate: u32,
     ) -> Result<(), &'static str>;
     fn volume(&mut self, renderer: &str, value: u8) -> Result<u8, &'static str>;
+    fn read_volume(&mut self, _renderer: &str) -> Result<u8, &'static str> {
+        Err("volume-unavailable")
+    }
     fn calibrate(&mut self, _generation: u64, _sink: GenerationSink) -> Result<(), &'static str> {
         Err("calibration-unavailable")
     }
@@ -107,6 +110,7 @@ impl<B: Backend> Runtime<B> {
             return result;
         }
         let action = command.action.clone();
+        let refresh_volume = matches!(&action, Action::SelectRenderer { .. } | Action::GetState);
         let (mut result, effects) = self.session.apply(caller, command);
         if result.status == Status::Ok
             && let Action::BrowserActionResult {
@@ -164,7 +168,10 @@ impl<B: Backend> Runtime<B> {
                 break;
             }
         }
-        if executed {
+        if result.status == Status::Ok && refresh_volume {
+            self.refresh_volume();
+        }
+        if executed || refresh_volume {
             result.revision = self.snapshot().revision;
         }
         self.session.finish_result(caller, &result);
@@ -172,6 +179,7 @@ impl<B: Backend> Runtime<B> {
         result
     }
     pub fn event(&mut self, event: Event) {
+        let refresh_volume = matches!(&event, Event::Renderers(_));
         if let Event::BrowserDisconnected { owner } = &event {
             let pending: Vec<_> = self
                 .browser_actions
@@ -194,7 +202,25 @@ impl<B: Backend> Runtime<B> {
         for effect in effects {
             let _ = self.execute(effect, &mut ignored);
         }
+        if refresh_volume {
+            self.refresh_volume();
+        }
         self.bus.publish(self.snapshot().clone());
+    }
+    fn refresh_volume(&mut self) {
+        let Some(renderer_id) = self.snapshot().renderer_id.clone() else {
+            return;
+        };
+        if self
+            .snapshot()
+            .renderers
+            .iter()
+            .any(|room| room.id == renderer_id)
+            && let Ok(value) = self.backend.read_volume(&renderer_id)
+            && value <= 100
+        {
+            self.session.on_event(Event::Volume { renderer_id, value });
+        }
     }
     fn execute(&mut self, effect: Effect, result: &mut CommandResult) -> Result<(), &'static str> {
         match effect {
@@ -461,6 +487,14 @@ impl Backend for NativeBackend {
             .find(|room| room.remote_addr == renderer)
             .ok_or("renderer-unavailable")?;
         room.set_volume(i32::from(value));
+        self.read_volume(renderer)
+    }
+    fn read_volume(&mut self, renderer: &str) -> Result<u8, &'static str> {
+        let room = self
+            .rooms
+            .iter_mut()
+            .find(|room| room.remote_addr == renderer)
+            .ok_or("renderer-unavailable")?;
         u8::try_from(room.get_volume())
             .ok()
             .filter(|v| *v <= 100)
