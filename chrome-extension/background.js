@@ -73,6 +73,18 @@ chrome.tabCapture.onStatusChanged.addListener((info) => {
   }
 });
 
+chrome.commands?.onCommand.addListener((command, tab) => {
+  if (command !== 'cast-current-tab') return;
+  void ready.then(() => connectionMode === 'managed' ? managed.cast(tab) : castActiveTab()).catch((error) => {
+    if (connectionMode === 'managed') { managed.warning = publicError(error); managed.publish(); }
+    else { session.warning = publicError(error); broadcastState(); }
+  });
+});
+const refreshShortcut = () => { void ready.then(() => { if (connectionMode === 'managed') return managed.refreshBrowserStatus(); }).catch(() => {}); };
+chrome.runtime.onInstalled?.addListener(refreshShortcut);
+chrome.runtime.onStartup?.addListener(refreshShortcut);
+chrome.tabs.onActivated?.addListener(refreshShortcut);
+
 async function restoreSettings() {
   const stored = await chrome.storage.local.get(STORED_FIELDS);
   pairingToken = typeof stored.pairingToken === 'string' ? stored.pairingToken : '';

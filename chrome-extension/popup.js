@@ -1,4 +1,6 @@
 const elements = {
+  reload: document.querySelector('#reload'),
+  shortcut: document.querySelector('#shortcut-status'),
   mode: document.querySelector('#mode'),
   source: document.querySelector('#source'),
   volume: document.querySelector('#volume'),
@@ -31,6 +33,7 @@ elements.renderer.addEventListener('change', () => {
 });
 elements.cast.addEventListener('click', () => runCommand('cast'));
 elements.stop.addEventListener('click', () => runCommand('stop'));
+elements.reload.addEventListener('click', () => runCommand('reload-tab'));
 elements.calibrate.addEventListener('click', () => runCommand('calibrate'));
 elements.applyOffset.addEventListener('click', () => {
   const milliseconds = Number(elements.offset.value);
@@ -80,6 +83,9 @@ async function runCommand(command, fields = {}) {
 function render(nextState) {
   state = nextState;
   const managed = state.mode === 'managed';
+  elements.reload.hidden = !managed;
+  elements.reload.disabled = busy || !state.paired || state.cleanupPending || state.source !== 'chrome' || !state.capabilities?.browserCanReload;
+  elements.shortcut.textContent = !managed ? '' : state.capabilities?.shortcut ? `Chrome shortcut: ${state.capabilities.shortcut}` : 'Cast shortcut unassigned or unavailable. Check chrome://extensions/shortcuts.';
   elements.status.classList.toggle('error', Boolean(actionError || state.warning));
   elements.status.textContent = actionError || state.warning || (state.phase === 'streaming' && state.source === 'windows' ? 'Streaming Windows audio' : phaseLabel(state.phase));
   if (document.activeElement !== elements.mode) elements.mode.value = state.mode ?? 'legacy';

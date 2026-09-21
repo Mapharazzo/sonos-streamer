@@ -405,3 +405,75 @@ fn fake_renderer_fetches_real_pcm_and_stop_retires_its_url() {
     runtime.shutdown();
     http.shutdown();
 }
+
+#[test]
+fn reload_result_waits_for_matching_browser_completion_and_is_cached() {
+    let mut runtime = Runtime::new(
+        "test-instance".into(),
+        FakeBackend::default(),
+        Arc::new(AudioHub::new()),
+        Preferences::default(),
+        "127.0.0.1:5901".parse().unwrap(),
+    );
+    let browser = Caller {
+        connection_id: "browser".into(),
+        role: Role::Browser,
+    };
+    let native = Caller {
+        connection_id: "native".into(),
+        role: Role::Controller,
+    };
+    runtime.event(swyh_rs::managed::state::Event::BrowserConnected {
+        owner: "browser".into(),
+    });
+    runtime.command(
+        &browser,
+        Command {
+            request_id: "status".into(),
+            instance_id: "test-instance".into(),
+            expected_revision: runtime.snapshot().revision,
+            action: Action::BrowserStatus {
+                shortcut: "Ctrl+Shift+8".into(),
+                supported_tab: true,
+                has_recovery_tab: true,
+            },
+        },
+    );
+    let events = runtime.bus.subscribe_for("browser");
+    let _ = events.recv_timeout(std::time::Duration::from_secs(1));
+    let request = Command {
+        request_id: "reload".into(),
+        instance_id: "test-instance".into(),
+        expected_revision: runtime.snapshot().revision,
+        action: Action::ReloadTab,
+    };
+    assert_eq!(runtime.command(&native, request.clone()).status, Status::Ok);
+    assert!(runtime.awaiting_browser(&native, "reload"));
+    let mut action_id = None;
+    for _ in 0..2 {
+        if let Ok(swyh_rs::managed::events::BridgeEvent::BrowserAction { action_id: id }) =
+            events.recv_timeout(std::time::Duration::from_millis(50))
+        {
+            action_id = Some(id);
+            break;
+        }
+    }
+    runtime.command(
+        &browser,
+        Command {
+            request_id: "done".into(),
+            instance_id: "test-instance".into(),
+            expected_revision: runtime.snapshot().revision,
+            action: Action::BrowserActionResult {
+                action_id: action_id.unwrap(),
+                status: Status::Ok,
+                code: "invoke-extension".into(),
+            },
+        },
+    );
+    let completed = runtime.take_browser_results();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].0, native);
+    assert_eq!(completed[0].1.code, "invoke-extension");
+    assert_eq!(runtime.command(&native, request), completed[0].1);
+}

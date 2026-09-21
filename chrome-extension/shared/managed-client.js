@@ -37,7 +37,7 @@ export class ManagedClient {
     if (!this.authenticated || this.socket?.readyState !== 1) return Promise.reject(new Error('control-disconnected'));
     if (this.pending.has(command.requestId) || this.pending.size >= 16) return Promise.reject(new Error('command-busy'));
     return new Promise((resolve, reject) => {
-      const timer = this.later(() => { this.pending.delete(command.requestId); reject(new Error('command-outcome-unknown')); }, 16000);
+      const timer = this.later(() => { this.pending.delete(command.requestId); reject(new Error('command-outcome-unknown')); }, 21000);
       this.pending.set(command.requestId, { resolve, reject, timer });
       try { this.socket.send(JSON.stringify(command)); } catch { this.clear(timer); this.pending.delete(command.requestId); reject(new Error('control-disconnected')); }
     });

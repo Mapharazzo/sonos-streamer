@@ -70,6 +70,18 @@ Never paste the pairing token into logs or issue reports.
 Run `npm test`, `npm run verify`, and `npm run package` from this directory for local checks. Hardware results belong in [`../docs/windows-chrome-sonos-acceptance.md`](../docs/windows-chrome-sonos-acceptance.md).
 # Elgato Remote managed connection
 
+The default **Cast current tab** shortcut is **Ctrl+Shift+8**, active while Chrome
+has focus. The popup shows the binding Chrome actually assigned. If unassigned or
+conflicting, set it at `chrome://extensions/shortcuts`; user remapping is respected.
+The Stream Deck will target an observed Chrome window and invoke that binding.
+
+**Reload / Retry tab** stops capture, reloads the last selected media tab once,
+waits up to 15 seconds for the same origin, and attempts to restore seekable video
+position. Live/protected media and autoplay restrictions may require manual
+resume. Reload never manufactures a tab capture grant: press Cast or the shortcut
+again after the reload. Closing/navigating away from the selected tab cancels
+recovery. The recovery tab is kept only for the current Chrome browser session.
+
 Choose **Elgato Remote** in the popup, paste the private Sonos pairing token from
 the Windows client and click Pair. Pairing keeps shared controls connected without
 capturing audio. Choose a room and **Chrome tab** or **All Windows audio**. Changing

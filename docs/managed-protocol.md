@@ -48,6 +48,11 @@ Results contain `type:result`, request ID, `status` (`ok`, `rejected`, `failed`)
 code and revision. Transport/runtime failures use bounded codes, not raw errors.
 An accepted command requests an operation; the state event confirms playback.
 The runtime returns a browser lease only to the requesting browser controller.
+Reload uses a separate unpredictable browser action ID. Its result is held until
+that browser reports completion (or the bounded operation times out); another
+controller cannot claim completion. `invoke-extension` means reload succeeded
+but a fresh popup/shortcut invocation is required for capture. Transport replies
+wait up to 20 seconds to accommodate the browser's 15-second reload limit.
 
 Deduplication is scoped to authenticated controller connection and request ID.
 The last 256 requests are cached per connection, with at most 16 connections.

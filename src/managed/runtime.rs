@@ -6,7 +6,7 @@ use super::{
     events::{BridgeEvent, EventBus},
     leases::{LeaseRegistry, random_id},
     preferences::Preferences,
-    protocol::{Caller, Command, CommandResult, Phase, Snapshot, Status},
+    protocol::{Action, Caller, Command, CommandResult, Phase, Snapshot, Status},
     state::{Effect, Event, Session},
     streaming::{ManagedHttp, StreamEvent, StreamEventKind},
 };
@@ -44,6 +44,12 @@ pub trait Backend {
     }
 }
 
+struct PendingBrowserAction {
+    owner: String,
+    caller: Caller,
+    result: CommandResult,
+    deadline: Instant,
+}
 pub struct Runtime<B: Backend> {
     session: Session,
     backend: B,
@@ -57,6 +63,8 @@ pub struct Runtime<B: Backend> {
     transition_deadline: Option<(String, Instant)>,
     renderer_connections: std::collections::HashSet<SocketAddr>,
     renderer_lost_at: Option<Instant>,
+    browser_actions: std::collections::HashMap<String, PendingBrowserAction>,
+    browser_results: Vec<(Caller, CommandResult)>,
 }
 impl<B: Backend> Runtime<B> {
     pub fn new(
@@ -84,6 +92,8 @@ impl<B: Backend> Runtime<B> {
             transition_deadline: None,
             renderer_connections: Default::default(),
             renderer_lost_at: None,
+            browser_actions: Default::default(),
+            browser_results: vec![],
         }
     }
     pub fn snapshot(&self) -> &Snapshot {
@@ -93,9 +103,55 @@ impl<B: Backend> Runtime<B> {
         &self.backend
     }
     pub fn command(&mut self, caller: &Caller, command: Command) -> CommandResult {
+        if let Some(result) = self.session.cached_result(caller, &command) {
+            return result;
+        }
+        let action = command.action.clone();
         let (mut result, effects) = self.session.apply(caller, command);
+        if result.status == Status::Ok
+            && let Action::BrowserActionResult {
+                action_id,
+                status,
+                code,
+            } = action
+        {
+            if self
+                .browser_actions
+                .get(&action_id)
+                .is_some_and(|pending| pending.owner == caller.connection_id)
+            {
+                self.complete_browser_action(&action_id, status, &code);
+            } else {
+                result.status = Status::Rejected;
+                result.code = "stale-browser-action".into();
+            }
+        }
         let executed = !effects.is_empty();
         for effect in effects {
+            if let Effect::ReloadTab { owner, .. } = effect {
+                if self.browser_actions.len() >= 16 {
+                    result.status = Status::Rejected;
+                    result.code = "browser-busy".into();
+                    break;
+                }
+                let Ok(action_id) = random_id() else {
+                    result.status = Status::Failed;
+                    result.code = "identity-unavailable".into();
+                    break;
+                };
+                self.browser_actions.insert(
+                    action_id.clone(),
+                    PendingBrowserAction {
+                        owner: owner.clone(),
+                        caller: caller.clone(),
+                        result: result.clone(),
+                        deadline: Instant::now() + Duration::from_secs(17),
+                    },
+                );
+                self.bus
+                    .send_to(&owner, BridgeEvent::BrowserAction { action_id });
+                continue;
+            }
             if let Err(code) = self.execute(effect, &mut result) {
                 result.status = Status::Failed;
                 result.code = code.into();
@@ -116,6 +172,17 @@ impl<B: Backend> Runtime<B> {
         result
     }
     pub fn event(&mut self, event: Event) {
+        if let Event::BrowserDisconnected { owner } = &event {
+            let pending: Vec<_> = self
+                .browser_actions
+                .iter()
+                .filter(|(_, p)| &p.owner == owner)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in pending {
+                self.complete_browser_action(&id, Status::Failed, "browser-unavailable");
+            }
+        }
         let effects = self.session.on_event(event);
         let mut ignored = CommandResult {
             request_id: String::new(),
@@ -219,6 +286,15 @@ impl<B: Backend> Runtime<B> {
         self.backend.play(&room, generation, &url, sample_rate)
     }
     pub fn tick(&mut self, now: Instant) {
+        let expired: Vec<_> = self
+            .browser_actions
+            .iter()
+            .filter(|(_, p)| now >= p.deadline)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in expired {
+            self.complete_browser_action(&id, Status::Failed, "browser-action-timeout");
+        }
         if self
             .renderer_lost_at
             .is_some_and(|at| now >= at + Duration::from_secs(2))
@@ -256,6 +332,23 @@ impl<B: Backend> Runtime<B> {
         self.backend.stop();
         if let Some(lease) = self.active_lease.take() {
             self.leases.release(&lease);
+        }
+    }
+    pub fn awaiting_browser(&self, caller: &Caller, request_id: &str) -> bool {
+        self.browser_actions
+            .values()
+            .any(|pending| &pending.caller == caller && pending.result.request_id == request_id)
+    }
+    pub fn take_browser_results(&mut self) -> Vec<(Caller, CommandResult)> {
+        std::mem::take(&mut self.browser_results)
+    }
+    fn complete_browser_action(&mut self, id: &str, status: Status, code: &str) {
+        if let Some(mut pending) = self.browser_actions.remove(id) {
+            pending.result.status = status;
+            pending.result.code = code.into();
+            pending.result.revision = self.snapshot().revision;
+            self.session.finish_result(&pending.caller, &pending.result);
+            self.browser_results.push((pending.caller, pending.result));
         }
     }
 
@@ -464,6 +557,7 @@ pub fn run_until(path: &Path, shutdown: Arc<AtomicBool>) -> io::Result<()> {
         bridge.local_addr()
     );
     let mut network_check = Instant::now();
+    let mut browser_replies: Vec<(Caller, String, Sender<CommandResult>)> = vec![];
     while !shutdown.load(Ordering::Acquire) && bridge.is_running() {
         if let Ok(input) = input_rx.recv_timeout(Duration::from_millis(20)) {
             match input {
@@ -473,11 +567,18 @@ pub fn run_until(path: &Path, shutdown: Arc<AtomicBool>) -> io::Result<()> {
                     reply,
                 } => {
                     let result = runtime.command(&caller, command);
-                    let _ = reply.try_send(result);
+                    if result.status == Status::Ok
+                        && runtime.awaiting_browser(&caller, &result.request_id)
+                    {
+                        browser_replies.push((caller, result.request_id, reply));
+                    } else {
+                        let _ = reply.try_send(result);
+                    }
                 }
                 ManagedInput::Event(event) => runtime.event(event),
                 ManagedInput::ControllerDisconnected { caller } => {
-                    runtime.session.forget_controller(&caller.connection_id)
+                    runtime.session.forget_controller(&caller.connection_id);
+                    browser_replies.retain(|(owner, _, _)| owner != &caller);
                 }
             }
         }
@@ -542,6 +643,16 @@ pub fn run_until(path: &Path, shutdown: Arc<AtomicBool>) -> io::Result<()> {
             }
         }
         runtime.tick(Instant::now());
+        for (caller, result) in runtime.take_browser_results() {
+            browser_replies.retain(|(owner, request_id, reply)| {
+                if owner == &caller && request_id == &result.request_id {
+                    let _ = reply.try_send(result.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
     }
     runtime.shutdown();
     bridge.shutdown();

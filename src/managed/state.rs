@@ -137,6 +137,13 @@ impl Session {
     pub fn forget_controller(&mut self, connection_id: &str) {
         self.cache.remove(connection_id);
     }
+    pub fn cached_result(&self, caller: &Caller, command: &Command) -> Option<CommandResult> {
+        self.cache
+            .get(&caller.connection_id)?
+            .iter()
+            .find(|(previous, _)| previous == command)
+            .map(|(_, result)| result.clone())
+    }
 
     pub fn restore_preferences(&mut self, preferences: &super::preferences::Preferences) {
         self.snapshot.source = preferences.source;

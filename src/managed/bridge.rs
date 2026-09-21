@@ -461,7 +461,7 @@ fn control(mut socket: WebSocket<TcpStream>, shared: &Shared, text: &str, browse
                 }
                 pending.push(Pending {
                     request_id,
-                    deadline: Instant::now() + Duration::from_secs(15),
+                    deadline: Instant::now() + Duration::from_secs(20),
                     reply: result,
                 });
             }

@@ -36,8 +36,10 @@
         <div class="actions">
           <button id="cast" class="primary" type="button" disabled>Cast current tab</button>
           <button id="stop" type="button" disabled>Stop</button>
+          <button id="reload" type="button" disabled>Reload / Retry tab</button>
         </div>
         <p class="hint">Audio packets: <output id="packets">0 sent, 0 dropped</output></p>
+        <p class="hint" id="shortcut-status"></p>
         <div id="volume-controls"><label for="volume">Sonos volume <output id="volume-value">—</output></label><input id="volume" type="range" min="0" max="100" step="1" value="50"></div>
       </section>
 

@@ -19,6 +19,12 @@
     "default_popup": "popup.html",
     "default_title": "Cast tab to Sonos"
   },
+  "commands": {
+    "cast-current-tab": {
+      "suggested_key": { "default": "Ctrl+Shift+8" },
+      "description": "Cast the active tab to the selected Sonos room"
+    }
+  },
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/*", "https://app.plex.tv/*"],

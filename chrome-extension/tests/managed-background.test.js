@@ -38,3 +38,18 @@ test('competing Cast calls do not mint two capture grants', async () => {
   assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
   assert.equal(h.calls.filter((call) => call === 'grant').length, 1);
 });
+
+test('reload from native controller completes once and never requests capture itself', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.recoveryTab = { tabId: 42, origin: 'https://www.youtube.com' };
+  h.chrome.tabs.get = async () => ({ id: 42, url: 'https://www.youtube.com/watch?v=test', status: 'complete' });
+  h.chrome.tabs.reload = async () => h.calls.push('reload');
+  h.chrome.tabs.sendMessage = async (_tab, message) => { h.calls.push(message.type); return message.type === 'recovery:ready' ? { ready: true } : {}; };
+  let result;
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async (message) => { if (message.action?.type === 'browser-action-result') result = message.action; return send(message); };
+  await h.background.event({ type: 'browser-action', actionId: 'action' });
+  assert.equal(h.calls.filter((call) => call === 'reload').length, 1);
+  assert.equal(h.calls.includes('grant'), false);
+  assert.deepEqual(result, { type: 'browser-action-result', actionId: 'action', status: 'ok', code: 'invoke-extension' });
+});
