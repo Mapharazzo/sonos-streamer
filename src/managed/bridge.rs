@@ -368,6 +368,7 @@ fn control(mut socket: WebSocket<TcpStream>, shared: &Shared, text: &str, browse
         shared,
         caller: caller.clone(),
     };
+    let events = shared.events.subscribe_for(&caller.connection_id);
     if caller.role == Role::Browser
         && !lifecycle(
             shared,
@@ -378,7 +379,6 @@ fn control(mut socket: WebSocket<TcpStream>, shared: &Shared, text: &str, browse
     {
         return;
     }
-    let events = shared.events.subscribe_for(&caller.connection_id);
     if !send_json(
         &mut socket,
         json!({"type":"hello-ok", "version":1, "instanceId":shared.instance_id,"connectionId":caller.connection_id}),

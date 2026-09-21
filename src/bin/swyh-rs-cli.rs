@@ -79,6 +79,18 @@ fn main() -> Result<(), i32> {
         args.usage();
         return Err(1);
     }
+    if args.managed {
+        return swyh_rs::managed::runtime::run_until(
+            args.managed_config
+                .as_deref()
+                .expect("validated managed arguments"),
+            shutting_down,
+        )
+        .map_err(|error| {
+            eprintln!("Managed companion: {error}");
+            1
+        });
+    }
     if args.wizard == Some(true) {
         let base = get_config_mut().clone();
         match wizard::run_interactive_wizard(base) {

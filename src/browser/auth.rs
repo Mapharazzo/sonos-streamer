@@ -45,7 +45,7 @@ impl PairingToken {
             .unwrap_or(false)
     }
 
-    fn from_hex(encoded: &str) -> Option<Self> {
+    pub fn from_hex(encoded: &str) -> Option<Self> {
         decode_token(encoded).map(Self)
     }
 }

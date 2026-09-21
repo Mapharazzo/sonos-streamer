@@ -33,6 +33,9 @@ impl Default for CalibrationCoordinator {
 }
 
 impl CalibrationCoordinator {
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
     #[must_use]
     pub fn new() -> Self {
         Self::with_measurement(
@@ -55,6 +58,17 @@ impl CalibrationCoordinator {
         renderer_id: impl Into<String>,
         event_tx: Sender<BrowserEvent>,
     ) -> Result<(), CalibrationBusy> {
+        self.start_with_measurement(request_id, renderer_id, event_tx, Arc::clone(&self.measure))
+    }
+
+    /// Managed mode injects the pulse into its generation, without the legacy trigger file.
+    pub fn start_with_measurement(
+        &self,
+        request_id: impl Into<String>,
+        renderer_id: impl Into<String>,
+        event_tx: Sender<BrowserEvent>,
+        measure: MeasureLatency,
+    ) -> Result<(), CalibrationBusy> {
         self.active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| CalibrationBusy)?;
@@ -66,7 +80,6 @@ impl CalibrationCoordinator {
         });
         let active = Arc::clone(&self.active);
         let settle_delay = self.settle_delay;
-        let measure = Arc::clone(&self.measure);
         thread::Builder::new()
             .name("browser_calibration".to_string())
             .spawn(move || {

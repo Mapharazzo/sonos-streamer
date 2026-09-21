@@ -11,6 +11,8 @@ use crate::{enums::streaming::*, utils::traits::SanitizeArg};
 
 #[derive(Clone, Debug, Default)]
 pub struct Args {
+    pub managed: bool,
+    pub managed_config: Option<std::path::PathBuf>,
     pub dry_run: Option<bool>,
     pub config_id: Option<String>,
     pub server_port: Option<u16>,
@@ -71,6 +73,7 @@ Recognized options:
     --browser-source : receive audio from the local Chrome extension
     --browser-port u16 : local browser bridge port [5902]
     --show-browser-token : print the browser pairing token and exit
+    --managed --managed-config path : supervised local Sonos service (idle startup)
 "#
         );
         println!("{self:?}");
@@ -94,8 +97,28 @@ Recognized options:
 
     fn parse_with(&mut self, mut argparser: Parser) -> Result<(), Vec<String>> {
         let mut errors: Vec<String> = Vec::new();
-        while let Some(arg) = argparser.next().unwrap() {
+        let mut legacy_option = false;
+        loop {
+            let arg = match argparser.next() {
+                Ok(Some(arg)) => arg,
+                Ok(None) => break,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    break;
+                }
+            };
+            if !matches!(
+                &arg,
+                Long("managed" | "managed-config" | "help") | Short('h')
+            ) {
+                legacy_option = true;
+            }
             match arg {
+                Long("managed") => self.managed = true,
+                Long("managed-config") => match argparser.value() {
+                    Ok(path) => self.managed_config = Some(path.into()),
+                    Err(_) => errors.push("Missing managed configuration path".into()),
+                },
                 Short('h') | Long("help") => {
                     self.usage();
                 }
@@ -312,7 +335,16 @@ Recognized options:
                 _ => (),
             }
         }
-        println!("{self:?}\n");
+        if self.managed && (legacy_option || self.managed_config.is_none()) {
+            errors
+                .push("Managed mode requires --managed-config and cannot use legacy flags".into());
+        }
+        if !self.managed && self.managed_config.is_some() {
+            errors.push("--managed-config requires --managed".into());
+        }
+        if !self.managed {
+            println!("{self:?}\n");
+        }
         if errors.is_empty() {
             Ok(())
         } else {

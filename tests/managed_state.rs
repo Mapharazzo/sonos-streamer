@@ -58,6 +58,47 @@ fn startup_is_idle_and_cannot_capture_without_room_and_start() {
 }
 
 #[test]
+fn reconnected_browser_must_confirm_cleanup_before_capture_can_restart() {
+    let mut session = configured(Source::Chrome);
+    session.on_event(Event::BrowserConnected {
+        owner: "old-browser".into(),
+    });
+    let prepare = command(&session, "prepare", Action::PrepareBrowser);
+    session.apply(&caller("old-browser", Role::Browser), prepare);
+    session.on_event(Event::BrowserDisconnected {
+        owner: "old-browser".into(),
+    });
+    let effects = session.on_event(Event::BrowserConnected {
+        owner: "new-browser".into(),
+    });
+    let transition = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::ReleaseBrowser {
+                owner,
+                transition_id,
+            } if owner == "new-browser" => Some(transition_id.clone()),
+            _ => None,
+        })
+        .expect("request cleanup from reconnected extension");
+    let ack = command(
+        &session,
+        "clean",
+        Action::CaptureReleased {
+            transition_id: transition,
+        },
+    );
+    assert_eq!(
+        session
+            .apply(&caller("new-browser", Role::Browser), ack)
+            .0
+            .status,
+        Status::Ok
+    );
+    assert_eq!(session.snapshot().phase, Phase::Idle);
+}
+
+#[test]
 fn windows_start_is_explicit_and_streaming_waits_for_matching_renderer_feedback() {
     let mut session = configured(Source::Windows);
     assert_eq!(session.snapshot().phase, Phase::Idle);

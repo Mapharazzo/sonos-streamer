@@ -1,5 +1,6 @@
 param(
-    [string]$IpAddress = "192.168.69.111"
+    [string]$IpAddress = "",
+    [string]$ManagedConfig = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,9 +15,14 @@ if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
 New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $LogPath = Join-Path $LogDirectory "companion-$Timestamp.log"
-$CompanionArguments = @("--browser-source", "--ip_address", $IpAddress)
+$CompanionArguments = @("--browser-source")
+if ($ManagedConfig) {
+    $CompanionArguments = @("--managed", "--managed-config", $ManagedConfig)
+} elseif ($IpAddress) {
+    $CompanionArguments += @("--ip_address", $IpAddress)
+}
 
-"Starting Sonos Tab Caster on $IpAddress; log: $LogPath" | Tee-Object -FilePath $LogPath
+"Starting Sonos Tab Caster; log: $LogPath" | Tee-Object -FilePath $LogPath
 $SetupErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {

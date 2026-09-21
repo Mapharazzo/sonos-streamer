@@ -13,92 +13,99 @@ const NCC_THRESHOLD: f32 = 0.35;
 /// Start the latency mic listener. `input_name` is optional substring match (case-insensitive).
 pub fn start_latency_listener(input_name: Option<String>) {
     std::thread::spawn(move || {
-        let device = match pick_input_cpal_device(input_name.as_deref()) {
-            Some(d) => d,
-            None => {
-                error!("No input device available for latency listener.");
-                return;
-            }
+        let Ok(_stream) = open_latency_listener(input_name.as_deref()) else {
+            return;
         };
-
-        let config = match device.default_input_config() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to get default input config: {e}");
-                return;
-            }
-        };
-
-        let channels = usize::from(config.channels());
-        info!(
-            "Latency listener on: {} ({} ch, {:?})",
-            cpal_device_display_name(&device),
-            channels,
-            config.sample_format()
-        );
-
-        let pulse = barker_mono();
-        let pulse_energy: f32 = pulse.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
-
-        let mut buffer: Vec<f32> = Vec::new();
-        let err_fn = |err| error!("Input audio stream error: {err}");
-
-        let stream_result = match config.sample_format() {
-            SampleFormat::F32 => device.build_input_stream(
-                &config.into(),
-                move |data: &[f32], _: &_| {
-                    process_input(data, channels, &mut buffer, &pulse, pulse_energy)
-                },
-                err_fn,
-                None,
-            ),
-            SampleFormat::I16 => device.build_input_stream(
-                &config.into(),
-                move |data: &[i16], _: &_| {
-                    let f32s: Vec<f32> = data.iter().map(|s| s.to_sample()).collect();
-                    process_input(&f32s, channels, &mut buffer, &pulse, pulse_energy)
-                },
-                err_fn,
-                None,
-            ),
-            SampleFormat::U16 => device.build_input_stream(
-                &config.into(),
-                move |data: &[u16], _: &_| {
-                    let f32s: Vec<f32> = data.iter().map(|s| s.to_sample()).collect();
-                    process_input(&f32s, channels, &mut buffer, &pulse, pulse_energy)
-                },
-                err_fn,
-                None,
-            ),
-            SampleFormat::I32 => device.build_input_stream(
-                &config.into(),
-                move |data: &[i32], _: &_| {
-                    let f32s: Vec<f32> = data.iter().map(|s| s.to_sample()).collect();
-                    process_input(&f32s, channels, &mut buffer, &pulse, pulse_energy)
-                },
-                err_fn,
-                None,
-            ),
-            other => {
-                warn!("Unsupported input sample format {other:?}; latency detection disabled.");
-                return;
-            }
-        };
-
-        let stream = match stream_result {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to build input stream: {e}");
-                return;
-            }
-        };
-
-        stream.play().expect("latency listener stream");
-
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
     });
+}
+
+/// Return the running microphone stream so managed callers can release it.
+pub fn open_latency_listener(input_name: Option<&str>) -> Result<cpal::Stream, &'static str> {
+    let device = match pick_input_cpal_device(input_name) {
+        Some(d) => d,
+        None => {
+            error!("No input device available for latency listener.");
+            return Err("microphone-unavailable");
+        }
+    };
+
+    let config = match device.default_input_config() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to get default input config: {e}");
+            return Err("microphone-format-unavailable");
+        }
+    };
+
+    let channels = usize::from(config.channels());
+    info!(
+        "Latency listener on: {} ({} ch, {:?})",
+        cpal_device_display_name(&device),
+        channels,
+        config.sample_format()
+    );
+
+    let pulse = barker_mono();
+    let pulse_energy: f32 = pulse.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+
+    let mut buffer: Vec<f32> = Vec::new();
+    let err_fn = |err| error!("Input audio stream error: {err}");
+
+    let stream_result = match config.sample_format() {
+        SampleFormat::F32 => device.build_input_stream(
+            &config.into(),
+            move |data: &[f32], _: &_| {
+                process_input(data, channels, &mut buffer, &pulse, pulse_energy)
+            },
+            err_fn,
+            None,
+        ),
+        SampleFormat::I16 => device.build_input_stream(
+            &config.into(),
+            move |data: &[i16], _: &_| {
+                let f32s: Vec<f32> = data.iter().map(|s| s.to_sample()).collect();
+                process_input(&f32s, channels, &mut buffer, &pulse, pulse_energy)
+            },
+            err_fn,
+            None,
+        ),
+        SampleFormat::U16 => device.build_input_stream(
+            &config.into(),
+            move |data: &[u16], _: &_| {
+                let f32s: Vec<f32> = data.iter().map(|s| s.to_sample()).collect();
+                process_input(&f32s, channels, &mut buffer, &pulse, pulse_energy)
+            },
+            err_fn,
+            None,
+        ),
+        SampleFormat::I32 => device.build_input_stream(
+            &config.into(),
+            move |data: &[i32], _: &_| {
+                let f32s: Vec<f32> = data.iter().map(|s| s.to_sample()).collect();
+                process_input(&f32s, channels, &mut buffer, &pulse, pulse_energy)
+            },
+            err_fn,
+            None,
+        ),
+        other => {
+            warn!("Unsupported input sample format {other:?}; latency detection disabled.");
+            return Err("unsupported-microphone-format");
+        }
+    };
+
+    let stream = match stream_result {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to build input stream: {e}");
+            return Err("microphone-open-failed");
+        }
+    };
+
+    stream.play().map_err(|_| "microphone-start-failed")?;
+    Ok(stream)
 }
 
 /// Interleaved samples -> mono mean per frame.

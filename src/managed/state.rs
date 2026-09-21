@@ -45,6 +45,10 @@ pub enum Effect {
 
 #[derive(Debug, Clone)]
 pub enum Event {
+    OperationFailed {
+        generation: u64,
+        code: &'static str,
+    },
     Renderers(Vec<RendererSummary>),
     BrowserConnected {
         owner: String,
@@ -132,6 +136,25 @@ impl Session {
 
     pub fn forget_controller(&mut self, connection_id: &str) {
         self.cache.remove(connection_id);
+    }
+
+    pub fn restore_preferences(&mut self, preferences: &super::preferences::Preferences) {
+        self.snapshot.source = preferences.source;
+        self.snapshot
+            .renderer_id
+            .clone_from(&preferences.renderer_id);
+        self.snapshot.manual_offset_ms = preferences.manual_offset_ms;
+    }
+
+    /// Runtime results (notably the private lease) must be replayed exactly.
+    pub fn finish_result(&mut self, caller: &Caller, result: &CommandResult) {
+        if let Some(cache) = self.cache.get_mut(&caller.connection_id)
+            && let Some((_, cached)) = cache
+                .iter_mut()
+                .find(|(command, _)| command.request_id == result.request_id)
+        {
+            *cached = result.clone();
+        }
     }
 
     pub fn apply(&mut self, caller: &Caller, command: Command) -> (CommandResult, Vec<Effect>) {
@@ -457,6 +480,11 @@ impl Session {
         let before = self.snapshot.clone();
         let mut effects = vec![];
         match event {
+            Event::OperationFailed { generation, code } => {
+                if self.snapshot.generation == generation {
+                    self.snapshot.error_code = Some(code.into());
+                }
+            }
             Event::Renderers(mut renderers) => {
                 renderers.truncate(128);
                 self.snapshot.renderers = renderers;
@@ -469,8 +497,15 @@ impl Session {
             }
             Event::BrowserConnected { owner } => {
                 if self.browser_owner.is_none() {
-                    self.browser_owner = Some(owner);
+                    self.browser_owner = Some(owner.clone());
                     self.snapshot.capabilities.browser_connected = true;
+                    if self.capture_owner.is_some() {
+                        // A reconnect cannot inherit permission to capture. Ask the
+                        // newly authenticated extension to close any surviving
+                        // offscreen producer and acknowledge a fresh transition.
+                        self.capture_owner = Some(owner);
+                        effects = self.stop_and_select(self.snapshot.source);
+                    }
                 }
             }
             Event::BrowserDisconnected { owner } => {
@@ -552,6 +587,7 @@ impl Session {
                     && self.snapshot.phase == Phase::Streaming
                 {
                     self.snapshot.measured_delay_ms = milliseconds.min(5000);
+                    self.snapshot.error_code = None;
                 }
             }
         }

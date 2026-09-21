@@ -457,6 +457,13 @@ impl Renderer {
 
     /// play - start play on this renderer, using Openhome if present, else `AvTransport` (if present)
     pub fn play(&mut self, local_addr: &IpAddr, streaminfo: StreamInfo) -> Result<(), &str> {
+        let addr = SocketAddr::new(*local_addr, streaminfo.server_port);
+        let url = format!("http://{addr}/stream/swyh.{}", streaminfo.streaming_format);
+        self.play_url(&url, streaminfo)
+    }
+
+    /// Explicit generation URL for the managed runtime, sharing legacy SOAP code.
+    pub fn play_url(&mut self, streaming_url: &str, streaminfo: StreamInfo) -> Result<(), &str> {
         // do we support this protocol?
         if !self.supported_protocols.is_valid() {
             ui_log(
@@ -472,9 +479,7 @@ impl Renderer {
         }
         // build the hashmap with the formatting vars for the OH and AV play templates
         let mut fmt_vars = Context::new();
-        let addr = format!("{local_addr}:{}", streaminfo.server_port);
-        let streaming_url = format!("http://{addr}/stream/swyh.{}", streaminfo.streaming_format);
-        fmt_vars.insert("server_uri", Value::owned_str(streaming_url));
+        fmt_vars.insert("server_uri", Value::owned_str(streaming_url.to_string()));
         fmt_vars.insert(
             "bits_per_sample",
             Value::Int(streaminfo.bits_per_sample as i64),
@@ -536,7 +541,7 @@ impl Renderer {
             ui_log(
                 LogCategory::Info,
                 &format!(
-                    "OH Start playing on {} host={} port={} from {local_addr} using OH Playlist",
+                    "OH Start playing on {} host={} port={} from {streaming_url} using OH Playlist",
                     self.dev_name, self.host, self.port
                 ),
             );
@@ -548,7 +553,7 @@ impl Renderer {
             ui_log(
                 LogCategory::Info,
                 &format!(
-                    "AV Start playing on {} host={} port={} from {local_addr} using AV Play",
+                    "AV Start playing on {} host={} port={} from {streaming_url} using AV Play",
                     self.dev_name, self.host, self.port
                 ),
             );
@@ -900,6 +905,25 @@ MX: 3\r\n\r\n";
 // returns a list of all AVTransport DLNA and Openhome rendering devices
 //
 pub fn discover(agent: &ureq::Agent, rmap: &HashMap<String, Renderer>) -> Option<Vec<Renderer>> {
+    let ip = get_config().last_network.clone()?;
+    discover_at(agent, rmap, ip.parse().ok()?)
+}
+
+/// Managed discovery does not initialize or mutate the standalone configuration.
+pub fn discover_at(
+    agent: &ureq::Agent,
+    rmap: &HashMap<String, Renderer>,
+    local_addr: IpAddr,
+) -> Option<Vec<Renderer>> {
+    discover_cancellable(agent, rmap, local_addr, None)
+}
+
+pub fn discover_cancellable(
+    agent: &ureq::Agent,
+    rmap: &HashMap<String, Renderer>,
+    local_addr: IpAddr,
+    stop: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<Vec<Renderer>> {
     static AV_SCHEMA: &str = "urn:schemas-upnp-org:service:RenderingControl:1";
     static AV_DEVICE: &str = AV_SCHEMA;
     static OH_SCHEMA: &str = "urn:av-openhome-org:service:Product:1";
@@ -909,22 +933,7 @@ pub fn discover(agent: &ureq::Agent, rmap: &HashMap<String, Renderer>) -> Option
     debug!("SSDP discovery started");
 
     // get the address of the selected interface
-    let ip = if let Some(s) = get_config().last_network.clone() {
-        s
-    } else {
-        ui_log(LogCategory::Error, "SSDP: no active network in config.");
-        return None;
-    };
-    info!("running SSDP on {ip}");
-    let local_addr: IpAddr = if let Ok(addr) = ip.parse() {
-        addr
-    } else {
-        ui_log(
-            LogCategory::Error,
-            "SSDP: Unable to parse local ip address.",
-        );
-        return None;
-    };
+    info!("running SSDP on {local_addr}");
     let bind_addr = SocketAddr::new(local_addr, 0);
     let socket = if let Ok(s) = UdpSocket::bind(bind_addr) {
         s
@@ -1081,7 +1090,10 @@ pub fn discover(agent: &ureq::Agent, rmap: &HashMap<String, Renderer>) -> Option
     debug!("Getting new renderer descriptions");
     let mut renderers: Vec<Renderer> = Vec::with_capacity(devices.len());
 
-    for (location, from) in devices {
+    for (location, from) in devices.into_iter().take(128) {
+        if stop.is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Acquire)) {
+            return None;
+        }
         if let Some(xml) = get_service_description(agent, &location)
             && let Some(mut rend) = get_renderer(agent, &xml)
         {

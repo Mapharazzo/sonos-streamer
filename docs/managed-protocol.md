@@ -1,8 +1,31 @@
 # Managed Sonos control protocol v1
 
 Managed mode separates an authenticated controller from the single browser audio
-producer. The implementation is being assembled; the standalone CLI modes retain
-their existing behavior until managed runtime dispatch is installed.
+producer. Start it with `swyh-rs-cli --managed --managed-config <absolute-json-path>`.
+Standalone CLI modes retain their separate configuration and behavior.
+
+The supervisor creates a private token file containing 64 hexadecimal characters
+and a configuration file (Windows example):
+
+```json
+{
+  "version": 1,
+  "controlAddress": "127.0.0.1:5902",
+  "httpPort": 5901,
+  "tokenPath": "C:/Users/you/AppData/Local/ElgatoRemote/sonos/token",
+  "preferencesPath": "C:/Users/you/AppData/Local/ElgatoRemote/sonos/preferences.json"
+}
+```
+
+Optional `interfaceAddress`, `outputDevice` (exact Windows playback device name)
+and `microphone` settings customize hardware selection. Control always binds to
+loopback; the audio HTTP port must be reachable from Sonos on the LAN. Missing
+devices or an unavailable configured interface do not prevent idle readiness.
+Discovery retries; capture and microphone streams are opened only on Start and
+Calibrate respectively. Restart restores source, room and offset, never capture.
+The selected speaker must fetch the current generation within 15 seconds or
+playback fails and capture is closed. A browser reconnect requires a fresh
+cleanup acknowledgment before another capture can begin.
 
 Control uses loopback `/control/v1`; managed audio uses `/audio/v1`. A controller
 authenticates with version 1, the private pairing token and its role (`controller`
