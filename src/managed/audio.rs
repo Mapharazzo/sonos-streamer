@@ -118,6 +118,18 @@ impl AudioHub {
         }
     }
 
+    pub fn sink(&self, generation: u64) -> Result<GenerationSink, AudioError> {
+        let state = self.state.lock().unwrap();
+        let active = state
+            .active
+            .as_ref()
+            .filter(|active| active.id == generation && !active.retired.load(Ordering::Acquire))
+            .ok_or(AudioError::Retired)?;
+        Ok(GenerationSink {
+            active: Arc::clone(active),
+        })
+    }
+
     pub fn end_current(&self) {
         if let Some(active) = self.state.lock().unwrap().active.take() {
             active.retired.store(true, Ordering::Release);

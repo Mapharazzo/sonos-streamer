@@ -62,3 +62,10 @@ The pure state machine returns typed effects for the runtime. It does not open
 devices, issue SOAP requests or send network packets. Tests in
 `tests/managed_state.rs` pin the wire and ownership behavior independently of
 hardware; they do not claim real Sonos acceptance.
+
+The managed socket bridge authenticates before dispatch, rejects ordinary web
+origins, limits connections/messages, and broadcasts ordered state to each
+controller. Slow readers are disconnected and recover from the latest snapshot.
+Only the authenticated browser owner can mint a 30-second, single-use producer
+lease, scoped to the server instance and audio generation. Controller disconnects
+do not stop playback; producer/browser ownership loss is delivered to the runtime.
