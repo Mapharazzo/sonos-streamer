@@ -1,0 +1,7 @@
+{
+  "type": "command",
+  "requestId": "request-1",
+  "instanceId": "instance-1",
+  "expectedRevision": 1,
+  "action": { "type": "select-source", "source": "windows" }
+}
