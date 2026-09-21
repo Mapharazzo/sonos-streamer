@@ -14,8 +14,9 @@ import {
   restoreOffscreenSession,
   terminalCleanup,
 } from './shared/session-state.js';
+import { ManagedBackground } from './managed-background.js';
 
-const STORED_FIELDS = ['pairingToken', 'selectedRendererId', 'measuredDelays', 'manualOffsets', 'plexOrigins'];
+const STORED_FIELDS = ['connectionMode', 'pairingToken', 'selectedRendererId', 'measuredDelays', 'manualOffsets', 'plexOrigins'];
 const ACTIVE_PHASES = new Set(['starting', 'streaming', 'calibrating']);
 
 let session = { ...initialSessionState(), cleanupPending: false, cleanupReason: null };
@@ -25,11 +26,19 @@ let manualOffsets = {};
 let plexOrigins = [];
 let offscreenCreation = null;
 let requestSequence = 0;
+let connectionMode = 'managed';
+const managed = new ManagedBackground({ chrome, ensureOffscreen: ensureOffscreenDocument, sendOffscreen, onState(state) {
+  void chrome.runtime.sendMessage({ type: 'state-update', state }).catch(() => {});
+} });
 
 const ready = restoreSettings();
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== 'object') return undefined;
+  if (message.type === 'managed-offscreen-event') {
+    void ready.then(() => { if (connectionMode === 'managed') return managed.event(message.event); }).catch((error) => { managed.warning = publicError(error); managed.publish(); });
+    return undefined;
+  }
   if (message.type === 'offscreen-event') {
     void ready.then(() => handleOffscreenEvent(message.event));
     return undefined;
@@ -48,14 +57,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  if (connectionMode === 'managed') { void ready.then(() => managed.tabClosedOrNavigated(tabId)).catch(() => {}); return; }
   if (tabId === session.tabId) void stopCapture('tab-removed');
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (connectionMode === 'managed') { if (changeInfo.status === 'loading') void ready.then(() => managed.tabClosedOrNavigated(tabId)).catch(() => {}); return; }
   if (tabId === session.tabId && changeInfo.status === 'loading') void stopCapture('tab-navigated');
 });
 
 chrome.tabCapture.onStatusChanged.addListener((info) => {
+  if (connectionMode === 'managed') { if (['stopped', 'error'].includes(info.status)) void ready.then(() => managed.tabClosedOrNavigated(info.tabId)).catch(() => {}); return; }
   if (info.tabId === session.tabId && ['stopped', 'error'].includes(info.status)) {
     void stopCapture(`capture-${info.status}`);
   }
@@ -67,6 +79,12 @@ async function restoreSettings() {
   measuredDelays = isRecord(stored.measuredDelays) ? stored.measuredDelays : {};
   manualOffsets = isRecord(stored.manualOffsets) ? stored.manualOffsets : {};
   plexOrigins = Array.isArray(stored.plexOrigins) ? stored.plexOrigins : [];
+  connectionMode = stored.connectionMode === 'legacy' ? 'legacy' : 'managed';
+  if (connectionMode === 'managed') {
+    try { await managed.restore(pairingToken, plexOrigins); }
+    catch (error) { managed.warning = publicError(error); }
+    return;
+  }
   if (typeof stored.selectedRendererId === 'string') {
     session.selectedRendererId = stored.selectedRendererId;
     applyRendererSettings(stored.selectedRendererId);
@@ -93,6 +111,20 @@ async function restoreSettings() {
 }
 
 async function handlePopupMessage(message) {
+  if (message.command === 'pair' && message.mode && message.mode !== connectionMode) {
+    if (!['managed', 'legacy'].includes(message.mode)) throw new Error('Unknown connection mode');
+    if (!message.token?.trim()) throw new Error('Enter the token for the selected mode');
+    const active = connectionMode === 'managed' ? managed.publicState() : session;
+    if (['starting', 'streaming', 'switching', 'calibrating'].includes(active.phase)) throw new Error('Stop playback before changing mode');
+    if (connectionMode === 'managed') { if (await chrome.offscreen.hasDocument()) await sendOffscreen({ type: 'managed-close' }); }
+    else await stopCapture('mode-change');
+    connectionMode = message.mode;
+    await chrome.storage.local.set({ connectionMode });
+  }
+  if (connectionMode === 'managed') {
+    if (message.command === 'register-plex-origin') { await registerPlexOrigin(message.origin); managed.plexOrigins = plexOrigins; return managed.publicState(); }
+    return managed.popup(message);
+  }
   if (message.type === 'state-request') return publicState();
   const command = message.command;
   switch (command) {
@@ -404,7 +436,9 @@ async function sendOffscreen(message) {
 }
 
 function publicState() {
+  if (connectionMode === 'managed') return managed.publicState();
   return {
+    mode: 'legacy',
     ...session,
     hasStoredToken: pairingToken.length > 0,
     plexOrigins: [...plexOrigins],

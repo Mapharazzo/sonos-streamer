@@ -99,6 +99,26 @@ fn reconnected_browser_must_confirm_cleanup_before_capture_can_restart() {
 }
 
 #[test]
+fn producer_loss_requests_cleanup_from_its_connected_browser() {
+    let mut session = configured(Source::Chrome);
+    session.on_event(Event::BrowserConnected {
+        owner: "browser".into(),
+    });
+    let prepare = command(&session, "prepare", Action::PrepareBrowser);
+    session.apply(&caller("browser", Role::Browser), prepare);
+    let generation = session.snapshot().generation;
+    let effects = session.on_event(Event::ProducerDisconnected {
+        owner: "browser".into(),
+        generation,
+    });
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect,Effect::ReleaseBrowser{owner,..} if owner=="browser"))
+    );
+}
+
+#[test]
 fn windows_start_is_explicit_and_streaming_waits_for_matching_renderer_feedback() {
     let mut session = configured(Source::Windows);
     assert_eq!(session.snapshot().phase, Phase::Idle);

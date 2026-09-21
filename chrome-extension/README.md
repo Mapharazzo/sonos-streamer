@@ -68,3 +68,14 @@ Never paste the pairing token into logs or issue reports.
 - No protected-video bypass, PC-wide audio capture, system audio-delay driver, native-app auto-launch, Chrome Web Store signing, or unattended background service.
 
 Run `npm test`, `npm run verify`, and `npm run package` from this directory for local checks. Hardware results belong in [`../docs/windows-chrome-sonos-acceptance.md`](../docs/windows-chrome-sonos-acceptance.md).
+# Elgato Remote managed connection
+
+Choose **Elgato Remote** in the popup, paste the private Sonos pairing token from
+the Windows client and click Pair. Pairing keeps shared controls connected without
+capturing audio. Choose a room and **Chrome tab** or **All Windows audio**. Changing
+source stops playback; click Cast or Start afterward. Stop preserves the control
+connection. The Windows client and Stream Deck share the same source and room.
+
+**Standalone tab caster (legacy)** explicitly selects the original `/browser/v1`
+companion. Supply that companion's token when changing connection modes. The
+extension never retries a managed mutation against the legacy endpoint.

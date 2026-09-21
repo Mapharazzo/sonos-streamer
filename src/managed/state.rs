@@ -467,13 +467,30 @@ impl Session {
     }
 
     fn fail_playback(&mut self, code: &str) -> Vec<Effect> {
+        let request_cleanup = self.transition.is_none()
+            && self.capture_owner.is_some()
+            && self.capture_owner == self.browser_owner;
         let generation = self.snapshot.generation;
         self.new_generation();
         self.transition = None;
         self.producer_lease = None;
         self.snapshot.phase = Phase::Failed;
         self.snapshot.error_code = Some(code.into());
-        vec![Effect::StopPlayback { generation }]
+        let mut effects = vec![Effect::StopPlayback { generation }];
+        if request_cleanup {
+            let owner = self.capture_owner.clone().unwrap();
+            let transition_id = format!("transition-{}", self.snapshot.generation);
+            self.transition = Some(Transition {
+                id: transition_id.clone(),
+                owner: owner.clone(),
+                destination: self.snapshot.source,
+            });
+            effects.push(Effect::ReleaseBrowser {
+                owner,
+                transition_id,
+            });
+        }
+        effects
     }
 
     pub fn on_event(&mut self, event: Event) -> Vec<Effect> {

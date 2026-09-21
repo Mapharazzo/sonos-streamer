@@ -10,12 +10,14 @@
     <main>
       <header>
         <span class="eyebrow">SONOS TAB CASTER</span>
-        <h1>Send this tab to Sonos</h1>
+        <h1>Windows → Sonos</h1>
         <p id="status" role="status" aria-live="polite">Loading extension state…</p>
       </header>
 
       <section aria-labelledby="pair-heading">
         <h2 id="pair-heading">Local app</h2>
+        <label for="mode">Connection</label>
+        <select id="mode"><option value="managed">Elgato Remote</option><option value="legacy">Standalone tab caster (legacy)</option></select>
         <label for="token">Pairing token</label>
         <div class="row">
           <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste token from the Windows app">
@@ -25,6 +27,8 @@
 
       <section aria-labelledby="cast-heading">
         <h2 id="cast-heading">Playback</h2>
+        <label for="source">Audio source</label>
+        <select id="source"><option value="chrome">Chrome tab</option><option value="windows">All Windows audio</option></select>
         <label for="renderer">Sonos room</label>
         <select id="renderer">
           <option value="">Choose a room</option>
@@ -34,6 +38,7 @@
           <button id="stop" type="button" disabled>Stop</button>
         </div>
         <p class="hint">Audio packets: <output id="packets">0 sent, 0 dropped</output></p>
+        <div id="volume-controls"><label for="volume">Sonos volume <output id="volume-value">—</output></label><input id="volume" type="range" min="0" max="100" step="1" value="50"></div>
       </section>
 
       <section aria-labelledby="sync-heading">

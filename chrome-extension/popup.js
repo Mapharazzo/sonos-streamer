@@ -1,4 +1,9 @@
 const elements = {
+  mode: document.querySelector('#mode'),
+  source: document.querySelector('#source'),
+  volume: document.querySelector('#volume'),
+  volumeValue: document.querySelector('#volume-value'),
+  volumeControls: document.querySelector('#volume-controls'),
   status: document.querySelector('#status'),
   token: document.querySelector('#token'),
   pair: document.querySelector('#pair'),
@@ -15,8 +20,12 @@ const elements = {
 };
 
 let state = null;
+let busy = false;
+let actionError = null;
 
-elements.pair.addEventListener('click', () => runCommand('pair', { token: elements.token.value }));
+elements.pair.addEventListener('click', () => runCommand('pair', { token: elements.token.value, mode: elements.mode.value }));
+elements.source.addEventListener('change', () => runCommand('select-source', { source: elements.source.value }));
+elements.volume.addEventListener('change', () => runCommand('set-volume', { value: Number(elements.volume.value) }));
 elements.renderer.addEventListener('change', () => {
   void runCommand('select-renderer', { rendererId: elements.renderer.value });
 });
@@ -52,6 +61,8 @@ async function loadState() {
 }
 
 async function runCommand(command, fields = {}) {
+  if (busy) return;
+  actionError = null;
   setBusy(true);
   try {
     const response = await chrome.runtime.sendMessage({ type: 'popup-command', command, ...fields });
@@ -68,8 +79,17 @@ async function runCommand(command, fields = {}) {
 
 function render(nextState) {
   state = nextState;
-  elements.status.classList.toggle('error', Boolean(state.warning));
-  elements.status.textContent = state.warning || phaseLabel(state.phase);
+  const managed = state.mode === 'managed';
+  elements.status.classList.toggle('error', Boolean(actionError || state.warning));
+  elements.status.textContent = actionError || state.warning || (state.phase === 'streaming' && state.source === 'windows' ? 'Streaming Windows audio' : phaseLabel(state.phase));
+  if (document.activeElement !== elements.mode) elements.mode.value = state.mode ?? 'legacy';
+  elements.source.value = state.source ?? 'chrome';
+  elements.source.disabled = busy || !managed || !state.paired || state.phase === 'switching';
+  elements.volumeControls.hidden = !managed;
+  elements.volumeValue.value = state.volume == null ? '—' : `${state.volume}%`;
+  if (state.volume != null && document.activeElement !== elements.volume) elements.volume.value = state.volume;
+  elements.volume.disabled = busy || !state.paired || !state.selectedRendererId;
+  elements.cast.textContent = managed && state.source === 'windows' ? 'Start Windows audio' : 'Cast current tab';
   elements.pair.textContent = state.hasStoredToken && !elements.token.value ? 'Connect' : 'Pair';
   renderRenderers();
   elements.measured.value = `${state.measuredDelayMs ?? 0} ms`;
@@ -77,12 +97,13 @@ function render(nextState) {
   if (document.activeElement !== elements.offset) elements.offset.value = state.manualOffsetMs ?? 0;
 
   const pairedWithRenderer = state.connected && state.paired && Boolean(state.selectedRendererId);
-  const castActive = ['starting', 'streaming', 'calibrating', 'stopping'].includes(state.phase);
-  elements.pair.disabled = castActive;
-  elements.cast.disabled = !pairedWithRenderer || state.phase !== 'idle';
-  elements.stop.disabled = !['starting', 'streaming', 'calibrating'].includes(state.phase);
-  elements.calibrate.disabled = state.phase !== 'streaming';
-  elements.applyOffset.disabled = !state.connected || !state.paired || !state.selectedRendererId;
+  const castActive = ['starting', 'streaming', 'calibrating', 'stopping', 'switching'].includes(state.phase);
+  elements.pair.disabled = busy || castActive;
+  elements.mode.disabled = busy || castActive;
+  elements.cast.disabled = busy || state.cleanupPending || !pairedWithRenderer || !['idle', 'failed'].includes(state.phase);
+  elements.stop.disabled = busy || !state.paired || !['starting', 'streaming', 'calibrating', 'failed', 'switching'].includes(state.phase);
+  elements.calibrate.disabled = busy || state.phase !== 'streaming' || (managed && !state.capabilities?.calibrationAvailable);
+  elements.applyOffset.disabled = busy || !state.connected || !state.paired || !state.selectedRendererId || (managed && state.source !== 'chrome');
   elements.renderer.disabled ||= castActive;
 }
 
@@ -104,12 +125,14 @@ function renderRenderers() {
   elements.renderer.disabled = !state.connected || !state.paired || state.renderers.length === 0;
 }
 
-function setBusy(busy) {
+function setBusy(value) {
+  busy = value;
   for (const button of document.querySelectorAll('button')) button.setAttribute('aria-busy', String(busy));
-  if (!busy && state) render(state);
+  if (state) render(state);
 }
 
 function showError(message) {
+  actionError = message;
   elements.status.classList.add('error');
   elements.status.textContent = message;
 }
@@ -124,6 +147,7 @@ function phaseLabel(phase) {
     streaming: 'Casting tab audio',
     calibrating: 'Running audible calibration…',
     stopping: 'Stopping…',
+    switching: 'Releasing Chrome capture…',
     failed: 'Casting stopped with an error',
   };
   return labels[phase] ?? phase;
