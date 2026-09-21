@@ -1,5 +1,28 @@
 # Windows Chrome-to-Sonos acceptance record
 
+## Managed integration evidence — 2026-09-21
+
+The managed Elgato integration passed 94 Rust tests, all-feature/all-target Clippy
+with warnings denied, and 76 extension tests plus the static verifier. Its actual
+Rust executable also passed a Go/Pi/deck fixture that compares known PCM against
+the renderer's WAV response and verifies Stop retires that generation.
+
+On Windows, native WASAPI Start reached Streaming with a real Living Room Sonos
+Era 300. A separate calibration pulse through that speaker and a Yeti Nano
+microphone measured **513 ms**. Volume was restored after the test. The browser
+producer for that pulse was a protocol fixture: this does **not** establish real
+Chrome tab capture, local suppression, video sync, shortcut or reload behavior.
+Browser automation could not initialize its kernel (missing path); those checks
+remain pending in the table below. The matching ARM64 Pi services were deployed
+and passed health checks with the physical deck and Windows subscriber connected.
+
+Known minor limitation: an interrupted calibration can report `calibration-busy`
+for up to about six seconds before a retry. Its old result cannot update a new
+generation, and its microphone is closed on Stop/source change.
+
+The legacy prototype checklist below remains a separate full browser acceptance
+record; pending rows must not be interpreted as passing managed hardware tests.
+
 This is the hardware acceptance ledger for the Chrome tab-casting prototype. Automated tests prove packet, protocol, state, and queue behavior; they do not prove Windows tab suppression, a real microphone round trip, Sonos buffering, or site-specific rendering.
 
 ## Test identity

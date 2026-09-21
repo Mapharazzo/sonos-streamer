@@ -59,7 +59,7 @@ Useful diagnostics:
 
 Never paste the pairing token into logs or issue reports.
 
-## Prototype limits
+## Standalone prototype limits
 
 - One producing extension session, one captured tab, and one selected renderer at a time.
 - YouTube, hosted Plex, and explicitly granted self-hosted Plex only.
@@ -87,6 +87,14 @@ the Windows client and click Pair. Pairing keeps shared controls connected witho
 capturing audio. Choose a room and **Chrome tab** or **All Windows audio**. Changing
 source stops playback; click Cast or Start afterward. Stop preserves the control
 connection. The Windows client and Stream Deck share the same source and room.
+
+The coordinated Windows installer provides the unpacked extension at
+`%LOCALAPPDATA%\ElgatoRemote\sonos-extension\current`. Load that directory once
+from `chrome://extensions` in Developer mode, then run the installed
+`copy-sonos-pairing-code.ps1` to copy the private code for pairing. After upgrades,
+Reload the extension card; keep the same directory to preserve its identity.
+Managed mode supports all Windows audio through the companion; the standalone
+prototype limits above apply to the legacy connection.
 
 **Standalone tab caster (legacy)** explicitly selects the original `/browser/v1`
 companion. Supply that companion's token when changing connection modes. The
