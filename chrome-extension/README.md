@@ -48,7 +48,7 @@ Prefer direct-play HTML5 content. If Plex uses DRM, a protected surface, or a vi
 
 **Stop** first asks the renderer to stop, then closes tab capture and its audio graph, disposes the video queue, restores the source video's exact inline styles, and disconnects the local bridge. The same cleanup runs for tab close/navigation, capture-track end, companion loss, and fatal protocol errors. Pair again to start a new session.
 
-If the popup says the content script is unavailable, reload the media page after installing or granting its origin. If calibration times out, verify the Windows default input or the `--mic` name, microphone privacy permission, input level, and physical placement; the last successful measurement (or zero) remains active.
+If the popup says the content script is unavailable, reload the media page after installing or granting its origin. After reloading or updating the extension itself, refresh any already-open media tab before casting again: Chrome invalidates the old content script. The updated handler catches that invalidation and disposes its old video overlay. If calibration times out, verify the Windows default input or the `--mic` name, microphone privacy permission, input level, and physical placement; the last successful measurement (or zero) remains active.
 
 Useful diagnostics:
 

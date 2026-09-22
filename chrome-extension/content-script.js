@@ -1,16 +1,29 @@
 (() => {
   let latestStatus = { status: 'audio-only', code: 'loading' };
+  let contextInvalidated = false;
+  function statusDeliveryFailed(error) {
+    if (contextInvalidated || !String(error?.message ?? error).includes('Extension context invalidated')) return;
+    contextInvalidated = true;
+    // Dispose after the current callback unwinds; stop() reports status too.
+    void controllerPromise.then((controller) => controller.stop()).catch(() => {});
+  }
   const controllerPromise = import(chrome.runtime.getURL('video/controller.js')).then(
     ({ VideoDelayController }) =>
       new VideoDelayController({
         onStatus(status) {
           latestStatus = status;
-          void chrome.runtime.sendMessage({ type: 'video-delay-status', status }).catch(() => {});
+          if (contextInvalidated) return;
+          try {
+            void chrome.runtime.sendMessage({ type: 'video-delay-status', status }).catch(statusDeliveryFailed);
+          } catch (error) {
+            statusDeliveryFailed(error);
+          }
         },
       }),
   );
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (contextInvalidated) return undefined;
     if (!message || typeof message !== 'object') return undefined;
     if (message.type === 'recovery:ready') { sendResponse({ ready: true }); return undefined; }
     if (message.type === 'recovery:snapshot') {
@@ -32,6 +45,7 @@
       return undefined;
     }
     controllerPromise.then((controller) => {
+      if (contextInvalidated) { sendResponse(latestStatus); return; }
       if (message.type === 'video-delay:set') latestStatus = controller.setDelay(message.milliseconds);
       else if (message.type === 'video-delay:stop') latestStatus = controller.stop();
       else latestStatus = controller.getStatus();
