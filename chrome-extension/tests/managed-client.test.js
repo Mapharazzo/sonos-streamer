@@ -30,3 +30,25 @@ test('terminal authentication failure cancels retries and pending requests', () 
   assert.equal(h.timers.size, 0);
   assert.equal(h.events.at(-1).code, 'authentication-failed');
 });
+
+test('default timers keep the browser global receiver during pairing and cleanup', (t) => {
+  const timers = new Map(); let sequence = 0;
+  t.mock.method(globalThis, 'setTimeout', function (callback, milliseconds) {
+    if (this !== globalThis) throw new TypeError('Illegal invocation');
+    const id = ++sequence; timers.set(id, { callback, milliseconds }); return id;
+  });
+  t.mock.method(globalThis, 'clearTimeout', function (id) {
+    if (this !== globalThis) throw new TypeError('Illegal invocation');
+    timers.delete(id);
+  });
+  const socket = new Socket();
+  const client = new ManagedClient({ connect: () => socket });
+  assert.doesNotThrow(() => client.connect('a'.repeat(64)));
+  socket.emit('open');
+  socket.emit('message', { data: JSON.stringify({ type: 'hello-ok', version: 1, instanceId: 'i', connectionId: 'c' }) });
+  assert.equal(client.authenticated, true);
+  assert.equal(timers.size, 0);
+  client.later(() => {}, 500);
+  assert.doesNotThrow(() => client.close());
+  assert.equal(timers.size, 0);
+});

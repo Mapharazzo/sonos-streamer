@@ -1,6 +1,6 @@
 import { CONTROL_URL, parseManagedEvent } from './managed-protocol.js';
 export class ManagedClient {
-  constructor({ connect = (url) => new WebSocket(url), schedule = setTimeout, cancel = clearTimeout, onEvent = () => {} } = {}) {
+  constructor({ connect = (url) => new WebSocket(url), schedule = (fn, ms) => globalThis.setTimeout(fn, ms), cancel = (timer) => globalThis.clearTimeout(timer), onEvent = () => {} } = {}) {
     Object.assign(this, { openSocket: connect, schedule, cancel, onEvent });
     this.socket = null; this.token = ''; this.pending = new Map(); this.timers = new Set(); this.backoff = 500; this.closed = true; this.authenticated = false;
   }
