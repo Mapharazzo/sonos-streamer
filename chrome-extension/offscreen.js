@@ -5,6 +5,7 @@ import { webSocketCloseReason } from './shared/diagnostics.js';
 import { ManagedClient } from './shared/managed-client.js';
 import { AUDIO_URL, AUDIO_FORMAT, createManagedCommand } from './shared/managed-protocol.js';
 import { reduceManagedState } from './shared/managed-state.js';
+import { allowedBackgroundSender } from './shared/message-senders.js';
 
 const packetizer = new PcmPacketizer(960);
 const captureGate = new GenerationGate();
@@ -32,8 +33,8 @@ const managedClient = new ManagedClient({ onEvent(event) {
   broadcastManaged(event);
 } });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || typeof message !== 'object') return undefined;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!allowedBackgroundSender(sender, chrome.runtime.getURL('')) || !message || typeof message !== 'object') return undefined;
 
   let operation;
   switch (message.type) {
@@ -59,6 +60,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
     case 'managed-close':
       managedClient.close();
+      managedToken = ''; managedMode = false; managedState = null;
       operation = stopManagedCapture();
       break;
     case 'bridge-connect':

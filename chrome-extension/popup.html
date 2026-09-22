@@ -18,10 +18,11 @@
         <h2 id="pair-heading">Local app</h2>
         <label for="mode">Connection</label>
         <select id="mode"><option value="managed">Elgato Remote</option><option value="legacy">Standalone tab caster (legacy)</option></select>
-        <label for="token">Pairing token</label>
+        <p id="setup-hint" class="hint">Connects automatically to Elgato Remote on this PC.</p>
+        <label id="token-label" for="token" hidden>Legacy app token</label>
         <div class="row">
-          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste token from the Windows app">
-          <button id="pair" type="button">Pair</button>
+          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Legacy app token" hidden>
+          <button id="pair" type="button">Connect</button>
         </div>
       </section>
 

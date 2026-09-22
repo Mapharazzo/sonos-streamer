@@ -22,10 +22,10 @@ test('release waits for in-flight getUserMedia and ends its tracks before report
   let listener, completeMedia, mediaRequested;
   const requested = new Promise((resolve) => { mediaRequested = resolve; });
   globalThis.WebSocket = Socket;
-  globalThis.chrome = { runtime: { onMessage: { addListener(callback) { listener = callback; } }, sendMessage: async () => {} } };
+  globalThis.chrome = { runtime: { id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", getURL: (path) => "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"+path, onMessage: { addListener(callback) { listener = callback; } }, sendMessage: async () => {} } };
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { mediaDevices: { getUserMedia() { mediaRequested(); return new Promise((resolve) => { completeMedia = resolve; }); } } } });
   await import('../offscreen.js?managed-offscreen-test');
-  const send = (message) => new Promise((resolve) => assert.equal(listener(message, {}, resolve), true));
+  const send = (message) => new Promise((resolve) => assert.equal(listener(message, { id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", url: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/background.js" }, resolve), true));
   await send({ type: 'managed-connect', token: 'a'.repeat(64) }); await new Promise(setImmediate);
   const starting = send({ type: 'managed-start', leaseId: 'lease', instanceId: 'instance', generation: 2, streamId: 'grant', tabId: 42 });
   await requested;

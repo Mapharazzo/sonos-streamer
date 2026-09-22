@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const REQUIRED_PERMISSIONS = ['activeTab', 'offscreen', 'scripting', 'storage', 'tabCapture'];
+const REQUIRED_PERMISSIONS = ['activeTab', 'nativeMessaging', 'offscreen', 'scripting', 'storage', 'tabCapture'];
 const RUNTIME_EXTENSIONS = new Set(['.js', '.mjs', '.html', '.css']);
 const EXCLUDED_DIRECTORIES = new Set(['dist', 'node_modules', 'tests', 'tools']);
 

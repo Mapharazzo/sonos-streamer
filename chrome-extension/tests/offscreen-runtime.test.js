@@ -45,7 +45,7 @@ class FakeWebSocket {
 function sendRuntimeMessage(listener, message) {
   return new Promise((resolve, reject) => {
     try {
-      assert.equal(listener(message, {}, resolve), true);
+      assert.equal(listener(message, { id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", url: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/background.js" }, resolve), true);
     } catch (error) {
       reject(error);
     }
@@ -56,7 +56,7 @@ test('browser commands complete their runtime response after being sent', async 
   let runtimeListener;
   globalThis.WebSocket = FakeWebSocket;
   globalThis.chrome = {
-    runtime: {
+    runtime: { id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", getURL: (path) => "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"+path,
       onMessage: {
         addListener(listener) {
           runtimeListener = listener;

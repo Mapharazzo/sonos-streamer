@@ -1,4 +1,5 @@
 import { effectiveDelay } from './shared/session-state.js';
+import { allowedBackgroundSender } from './shared/message-senders.js';
 
 const elements = {
   reload: document.querySelector('#reload'),
@@ -10,6 +11,8 @@ const elements = {
   volumeControls: document.querySelector('#volume-controls'),
   status: document.querySelector('#status'),
   token: document.querySelector('#token'),
+  tokenLabel: document.querySelector('#token-label'),
+  setupHint: document.querySelector('#setup-hint'),
   pair: document.querySelector('#pair'),
   renderer: document.querySelector('#renderer'),
   cast: document.querySelector('#cast'),
@@ -30,6 +33,7 @@ let busy = false;
 let actionError = null;
 
 elements.pair.addEventListener('click', () => runCommand('pair', { token: elements.token.value, mode: elements.mode.value }));
+elements.mode.addEventListener('change', renderConnection);
 elements.source.addEventListener('change', () => runCommand('select-source', { source: elements.source.value }));
 elements.volume.addEventListener('change', () => runCommand('set-volume', { value: Number(elements.volume.value) }));
 elements.renderer.addEventListener('change', () => {
@@ -51,8 +55,8 @@ elements.registerPlex.addEventListener('click', () => {
   void runCommand('register-plex-origin', { origin: elements.plexOrigin.value });
 });
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'state-update') render(message.state);
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (allowedBackgroundSender(sender, chrome.runtime.getURL('')) && message?.type === 'state-update') render(message.state);
 });
 
 void loadState();
@@ -100,7 +104,7 @@ function render(nextState) {
   if (state.volume != null && document.activeElement !== elements.volume) elements.volume.value = state.volume;
   elements.volume.disabled = busy || !state.paired || !state.selectedRendererId;
   elements.cast.textContent = managed && state.source === 'windows' ? 'Start Windows audio' : 'Cast current tab';
-  elements.pair.textContent = state.hasStoredToken && !elements.token.value ? 'Connect' : 'Pair';
+  renderConnection();
   renderRenderers();
   elements.measured.value = `${state.measuredDelayMs ?? 0} ms`;
   elements.videoDelay.value = managed && state.source !== 'chrome' ? 'Not used for Windows audio' : `${effectiveDelay(state.measuredDelayMs ?? 0, state.manualOffsetMs ?? 0)} ms`;
@@ -120,6 +124,23 @@ function render(nextState) {
   elements.calibrate.disabled = busy || state.phase !== 'streaming' || (managed && !state.capabilities?.calibrationAvailable);
   elements.applyOffset.disabled = busy || !state.connected || !state.paired || !state.selectedRendererId || (managed && state.source !== 'chrome');
   elements.renderer.disabled ||= castActive;
+}
+
+function renderConnection() {
+  const managed = elements.mode.value === 'managed';
+  elements.token.hidden = managed; elements.tokenLabel.hidden = managed;
+  elements.pair.textContent = managed ? (state?.paired ? 'Reconnect' : 'Connect') : 'Pair';
+  const setup = {
+    'app-unavailable': 'Open or install Elgato Remote on this PC, then click Connect.',
+    'native-installation-unavailable': 'Repair Elgato Remote, then click Connect.',
+    'native-origin-denied': 'This extension version does not match the installed app. Repair or update Elgato Remote.',
+    'native-unsupported-version': 'Update Elgato Remote to connect this extension.',
+    'native-invalid-response': 'Update or repair Elgato Remote, then click Connect.',
+    'app-authentication-failed': 'Restart Elgato Remote, then click Connect.',
+    connecting: 'Connecting to Elgato Remote…',
+    connected: 'Connected automatically to Elgato Remote on this PC.',
+  };
+  elements.setupHint.textContent = managed ? (setup[state?.setupStatus] ?? 'Connects automatically to Elgato Remote on this PC.') : 'Use the token from the standalone legacy app.';
 }
 
 function renderRenderers() {

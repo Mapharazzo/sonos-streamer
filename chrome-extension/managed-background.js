@@ -2,6 +2,7 @@ import { isSupportedMediaUrl } from './shared/background-state.js';
 import { CaptureLifecycle } from './shared/managed-state.js';
 import { effectiveDelay } from './shared/session-state.js';
 import { reloadSelectedTab, shortcutStatus } from './shared/recovery.js';
+import { loadNativeBootstrap } from './shared/native-bootstrap.js';
 
 export class ManagedBackground {
   constructor({ chrome, ensureOffscreen, sendOffscreen, onState }) {
@@ -9,25 +10,57 @@ export class ManagedBackground {
     this.token = ''; this.plexOrigins = []; this.snapshot = null; this.connected = false; this.tabId = null; this.warning = null; this.videoTabId = null; this.counters = {};
     this.recoveryTab = null; this.recoveryRunning = false; this.lastBrowserStatus = ''; this.statusPending = false;
     this.pendingTab = null;
+    this.active = true; this.bootstrapEpoch = 0; this.bootstrapPending = null; this.authRefreshed = false; this.setupStatus = 'connecting';
     this.lifecycle = new CaptureLifecycle({
       disposeAudio: () => this.sendOffscreen({ type: 'managed-stop' }),
       disposeVideo: () => this.stopVideo(),
       acknowledge: (transitionId) => this.command({ type: 'capture-released', transitionId }),
     });
   }
-  async restore(token, plexOrigins) {
+  deactivate() {
+    this.active = false; this.bootstrapEpoch++; this.bootstrapPending = null;
+    this.token = ''; this.connected = false; this.snapshot = null;
+  }
+  bootstrap({ refresh = false } = {}) {
+    if (!this.active) return Promise.resolve();
+    if (this.bootstrapPending) return this.bootstrapPending;
+    if (this.token && !refresh) return Promise.resolve();
+    const epoch = ++this.bootstrapEpoch;
+    this.setupStatus = 'connecting';
+    const current = () => this.active && epoch === this.bootstrapEpoch;
+    const attempt = (async () => {
+      try {
+        const bootstrap = await loadNativeBootstrap(this.chrome);
+        if (!current()) return;
+        this.installationId = bootstrap.installationId;
+        await this.restore(bootstrap.token, this.plexOrigins, epoch);
+        if (!current()) return;
+        await this.chrome.storage.local.remove?.('pairingToken');
+        if (current()) this.setupStatus = this.connected ? 'connected' : 'connecting';
+      } catch (error) {
+        if (current()) { this.token = ''; this.setupStatus = error.message.startsWith('native-') ? error.message : 'app-unavailable'; }
+      } finally { if (current()) this.publish(); }
+    })();
+    this.bootstrapPending = attempt;
+    void attempt.finally(() => { if (this.bootstrapPending === attempt) this.bootstrapPending = null; }).catch(() => {});
+    return attempt;
+  }
+  async restore(token, plexOrigins, epoch = this.bootstrapEpoch) {
     this.token = token; this.plexOrigins = plexOrigins;
     const recovery = await this.chrome.storage.session?.get('recoveryTab');
+    if (!this.active || epoch !== this.bootstrapEpoch) return;
     this.recoveryTab = recovery?.recoveryTab ?? null;
     if (!token) return;
     await this.ensureOffscreen();
+    if (!this.active || epoch !== this.bootstrapEpoch) return;
     const state = await this.sendOffscreen({ type: 'managed-connect', token });
+    if (!this.active || epoch !== this.bootstrapEpoch) return;
     this.connected = Boolean(state?.connected); this.snapshot = state?.snapshot ?? null; this.tabId = state?.capturing ? state.tabId : null; this.videoTabId = this.tabId;
     this.publish();
   }
   publicState() {
     const state = this.snapshot;
-    return { mode: 'managed', connected: this.connected, paired: this.connected && Boolean(state), hasStoredToken: Boolean(this.token), plexOrigins: this.plexOrigins, phase: state?.phase ?? 'disconnected', source: state?.source ?? 'chrome', selectedRendererId: state?.rendererId ?? null, renderers: state?.renderers ?? [], volume: state?.volume ?? null, measuredDelayMs: state?.measuredDelayMs ?? 0, manualOffsetMs: state?.manualOffsetMs ?? 0, capabilities: state?.capabilities ?? {}, warning: this.warning ?? state?.errorCode, tabId: this.tabId, counters: this.counters, cleanupPending: this.lifecycle.busy || this.recoveryRunning };
+    return { mode: 'managed', setupStatus: this.setupStatus, connected: this.connected, paired: this.connected && Boolean(state), plexOrigins: this.plexOrigins, phase: state?.phase ?? 'disconnected', source: state?.source ?? 'chrome', selectedRendererId: state?.rendererId ?? null, renderers: state?.renderers ?? [], volume: state?.volume ?? null, measuredDelayMs: state?.measuredDelayMs ?? 0, manualOffsetMs: state?.manualOffsetMs ?? 0, capabilities: state?.capabilities ?? {}, warning: this.warning ?? state?.errorCode, tabId: this.tabId, counters: this.counters, cleanupPending: this.lifecycle.busy || this.recoveryRunning };
   }
   publish() { this.onState(this.publicState()); }
   async command(action) { return this.sendOffscreen({ type: 'managed-command', action }); }
@@ -36,10 +69,9 @@ export class ManagedBackground {
     this.warning = null;
     switch (message.command) {
       case 'pair': {
-        const token = message.token?.trim() || this.token;
-        if (!/^[a-fA-F0-9]{64}$/.test(token)) throw new Error('Enter the Windows app pairing token');
         if (this.lifecycle.busy || ['starting', 'streaming', 'switching'].includes(this.snapshot?.phase)) throw new Error('Stop playback before pairing');
-        await this.chrome.storage.local.set({ pairingToken: token }); await this.restore(token, this.plexOrigins); break;
+        this.authRefreshed = false;
+        await this.bootstrap({ refresh: true }); break;
       }
       case 'select-source': await this.command({ type: 'select-source', source: message.source }); break;
       case 'select-renderer': await this.command({ type: 'select-renderer', rendererId: message.rendererId }); break;
@@ -84,6 +116,7 @@ export class ManagedBackground {
     });
   }
   async event(event) {
+    if (!this.active) return;
     if (event.type === 'state') {
       if (this.snapshot?.instanceId === event.instanceId && this.snapshot.revision > event.revision) return;
       this.snapshot = event; this.connected = true;
@@ -92,7 +125,7 @@ export class ManagedBackground {
         if (Number.isInteger(this.tabId)) await this.lifecycle.release();
       }
       void this.refreshBrowserStatus().catch(() => {});
-    } else if (event.type === 'hello-ok') { this.snapshot = null; this.connected = true; this.lastBrowserStatus = ''; }
+    } else if (event.type === 'hello-ok') { this.snapshot = null; this.connected = true; this.lastBrowserStatus = ''; this.authRefreshed = false; this.setupStatus = 'connected'; this.warning = null; }
     else if (event.type === 'browser-action') {
       let status = 'ok', code = 'invoke-extension';
       try { await this.reload(); } catch (error) {
@@ -107,6 +140,14 @@ export class ManagedBackground {
       if (event.type === 'disconnected' || event.type === 'error') { this.connected = false; this.snapshot = null; }
       if (event.code) this.warning = event.code;
       await this.lifecycle.release();
+      if (event.type === 'error' && event.code === 'authentication-failed') {
+        this.token = '';
+        if (!this.authRefreshed) {
+          this.authRefreshed = true;
+          await this.bootstrapPending;
+          await this.bootstrap({ refresh: true });
+        } else this.setupStatus = 'app-authentication-failed';
+      }
     } else if (event.type === 'audio-stats') this.counters = event;
     this.publish();
   }

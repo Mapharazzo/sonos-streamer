@@ -15,8 +15,9 @@ import {
   terminalCleanup,
 } from './shared/session-state.js';
 import { ManagedBackground } from './managed-background.js';
+import { allowedSender } from './shared/message-senders.js';
 
-const STORED_FIELDS = ['connectionMode', 'pairingToken', 'selectedRendererId', 'measuredDelays', 'manualOffsets', 'plexOrigins'];
+const STORED_FIELDS = ['connectionMode', 'pairingToken', 'legacyPairingToken', 'selectedRendererId', 'measuredDelays', 'manualOffsets', 'plexOrigins'];
 const ACTIVE_PHASES = new Set(['starting', 'streaming', 'calibrating']);
 
 let session = { ...initialSessionState(), cleanupPending: false, cleanupReason: null };
@@ -33,14 +34,14 @@ const managed = new ManagedBackground({ chrome, ensureOffscreen: ensureOffscreen
 
 const ready = restoreSettings();
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || typeof message !== 'object') return undefined;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!allowedSender(message, sender, { extensionOrigin: chrome.runtime.getURL(''), capturedTabId: connectionMode === 'managed' ? managed.tabId : session.tabId, plexOrigins })) return undefined;
   if (message.type === 'managed-offscreen-event') {
     void ready.then(() => { if (connectionMode === 'managed') return managed.event(message.event); }).catch((error) => { managed.warning = publicError(error); managed.publish(); });
     return undefined;
   }
   if (message.type === 'offscreen-event') {
-    void ready.then(() => handleOffscreenEvent(message.event));
+    void ready.then(() => { if (connectionMode === 'legacy') return handleOffscreenEvent(message.event); });
     return undefined;
   }
   if (message.type === 'video-delay-status') {
@@ -86,17 +87,24 @@ chrome.runtime.onStartup?.addListener(refreshShortcut);
 chrome.tabs.onActivated?.addListener(refreshShortcut);
 
 async function restoreSettings() {
+  // Content scripts never need credential storage. Managed credentials remain
+  // in the worker/offscreen process only, including across worker restarts.
+  await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+  await chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   const stored = await chrome.storage.local.get(STORED_FIELDS);
-  pairingToken = typeof stored.pairingToken === 'string' ? stored.pairingToken : '';
   measuredDelays = isRecord(stored.measuredDelays) ? stored.measuredDelays : {};
   manualOffsets = isRecord(stored.manualOffsets) ? stored.manualOffsets : {};
   plexOrigins = Array.isArray(stored.plexOrigins) ? stored.plexOrigins : [];
   connectionMode = stored.connectionMode === 'legacy' ? 'legacy' : 'managed';
   if (connectionMode === 'managed') {
-    try { await managed.restore(pairingToken, plexOrigins); }
-    catch (error) { managed.warning = publicError(error); }
+    managed.plexOrigins = plexOrigins;
+    await managed.bootstrap();
     return;
   }
+  managed.deactivate();
+  pairingToken = typeof stored.legacyPairingToken === 'string' ? stored.legacyPairingToken : typeof stored.pairingToken === 'string' ? stored.pairingToken : '';
+  if (pairingToken) await chrome.storage.local.set({ legacyPairingToken: pairingToken });
+  await chrome.storage.local.remove('pairingToken');
   if (typeof stored.selectedRendererId === 'string') {
     session.selectedRendererId = stored.selectedRendererId;
     applyRendererSettings(stored.selectedRendererId);
@@ -125,12 +133,13 @@ async function restoreSettings() {
 async function handlePopupMessage(message) {
   if (message.command === 'pair' && message.mode && message.mode !== connectionMode) {
     if (!['managed', 'legacy'].includes(message.mode)) throw new Error('Unknown connection mode');
-    if (!message.token?.trim()) throw new Error('Enter the token for the selected mode');
+    if (message.mode === 'legacy' && !message.token?.trim()) throw new Error('Enter the legacy app token');
     const active = connectionMode === 'managed' ? managed.publicState() : session;
     if (['starting', 'streaming', 'switching', 'calibrating'].includes(active.phase)) throw new Error('Stop playback before changing mode');
-    if (connectionMode === 'managed') { if (await chrome.offscreen.hasDocument()) await sendOffscreen({ type: 'managed-close' }); }
+    if (connectionMode === 'managed') { managed.deactivate(); if (await chrome.offscreen.hasDocument()) await sendOffscreen({ type: 'managed-close' }); }
     else await stopCapture('mode-change');
     connectionMode = message.mode;
+    if (connectionMode === 'managed') { managed.active = true; managed.plexOrigins = plexOrigins; }
     await chrome.storage.local.set({ connectionMode });
   }
   if (connectionMode === 'managed') {
@@ -182,7 +191,7 @@ async function pair(candidateToken) {
     : pairingToken;
   if (!token) throw new Error('Enter the pairing token shown by the local Sonos app');
   pairingToken = token;
-  await chrome.storage.local.set({ pairingToken });
+  await chrome.storage.local.set({ legacyPairingToken: pairingToken });
   await ensureOffscreenDocument();
   await sendOffscreen({ type: 'bridge-connect', token: pairingToken });
   return publicState();
