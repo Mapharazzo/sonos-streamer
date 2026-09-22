@@ -611,7 +611,10 @@ impl Session {
                     && self.snapshot.phase == Phase::Streaming
                 {
                     self.snapshot.measured_delay_ms = milliseconds.min(5000);
+                    // A successful calibration replaces any previous manual trial.
+                    self.snapshot.manual_offset_ms = 0;
                     self.snapshot.error_code = None;
+                    effects.push(Effect::PersistPreferences);
                 }
             }
         }

@@ -1,3 +1,5 @@
+import { effectiveDelay } from './shared/session-state.js';
+
 const elements = {
   reload: document.querySelector('#reload'),
   shortcut: document.querySelector('#shortcut-status'),
@@ -14,6 +16,8 @@ const elements = {
   stop: document.querySelector('#stop'),
   packets: document.querySelector('#packets'),
   measured: document.querySelector('#measured'),
+  videoDelay: document.querySelector('#video-delay'),
+  calibrationHint: document.querySelector('#calibration-hint'),
   offset: document.querySelector('#offset'),
   applyOffset: document.querySelector('#apply-offset'),
   calibrate: document.querySelector('#calibrate'),
@@ -99,6 +103,11 @@ function render(nextState) {
   elements.pair.textContent = state.hasStoredToken && !elements.token.value ? 'Connect' : 'Pair';
   renderRenderers();
   elements.measured.value = `${state.measuredDelayMs ?? 0} ms`;
+  elements.videoDelay.value = managed && state.source !== 'chrome' ? 'Not used for Windows audio' : `${effectiveDelay(state.measuredDelayMs ?? 0, state.manualOffsetMs ?? 0)} ms`;
+  elements.calibrate.textContent = managed ? 'Calibrate & apply' : 'Run audible calibration';
+  elements.calibrationHint.textContent = managed
+    ? 'Plays a timing signal, then automatically applies the measured video delay and resets manual adjustment to 0. You can fine-tune it afterwards.'
+    : 'Calibration briefly plays a timing signal through the selected speaker.';
   elements.packets.value = `${state.counters?.receivedPackets ?? 0} sent, ${state.counters?.droppedPackets ?? 0} dropped`;
   if (document.activeElement !== elements.offset) elements.offset.value = state.manualOffsetMs ?? 0;
 

@@ -46,13 +46,14 @@
       <section aria-labelledby="sync-heading">
         <h2 id="sync-heading">Lip sync</h2>
         <p class="hint">Measured delay: <output id="measured">0 ms</output></p>
+        <p class="hint">Video delay: <output id="video-delay">0 ms</output></p>
         <label for="offset">Manual adjustment (−5000 to 5000 ms)</label>
         <div class="row">
           <input id="offset" type="number" min="-5000" max="5000" step="1" value="0">
           <button id="apply-offset" type="button">Apply</button>
         </div>
         <button id="calibrate" type="button" disabled>Run audible calibration</button>
-        <p class="hint">Calibration briefly plays a timing signal through the selected speaker.</p>
+        <p class="hint" id="calibration-hint">Calibration briefly plays a timing signal through the selected speaker.</p>
       </section>
 
       <details>

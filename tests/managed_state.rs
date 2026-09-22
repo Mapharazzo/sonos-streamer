@@ -220,6 +220,46 @@ fn active_browser() -> (Session, Caller) {
 }
 
 #[test]
+fn calibration_applies_measurement_and_persists_cleared_manual_adjustment() {
+    let (mut session, browser) = active_browser();
+    let offset = command(&session, "offset", Action::SetOffset { milliseconds: 5000 });
+    session.apply(&browser, offset);
+    let calibrate = command(&session, "calibrate", Action::Calibrate);
+    assert_eq!(session.apply(&browser, calibrate).0.status, Status::Ok);
+    assert_eq!(session.snapshot().manual_offset_ms, 5000);
+    let effects = session.on_event(Event::Calibration {
+        generation: session.snapshot().generation,
+        milliseconds: 513,
+    });
+    assert_eq!(session.snapshot().measured_delay_ms, 513);
+    assert_eq!(session.snapshot().manual_offset_ms, 0);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistPreferences))
+    );
+}
+
+#[test]
+fn failed_or_stale_calibration_keeps_existing_adjustment() {
+    let (mut session, browser) = active_browser();
+    let offset = command(&session, "offset", Action::SetOffset { milliseconds: 5000 });
+    session.apply(&browser, offset);
+    session.on_event(Event::OperationFailed {
+        generation: session.snapshot().generation,
+        code: "calibration-timeout",
+    });
+    assert_eq!(session.snapshot().manual_offset_ms, 5000);
+    let effects = session.on_event(Event::Calibration {
+        generation: session.snapshot().generation - 1,
+        milliseconds: 513,
+    });
+    assert_eq!(session.snapshot().manual_offset_ms, 5000);
+    assert_eq!(session.snapshot().measured_delay_ms, 0);
+    assert!(effects.is_empty());
+}
+
+#[test]
 fn source_switch_waits_for_owner_release_then_remains_idle() {
     let (mut session, browser) = active_browser();
     let native = caller("native", Role::Controller);

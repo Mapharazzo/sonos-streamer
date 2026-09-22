@@ -34,7 +34,7 @@ Omit `--mic` to use the Windows default input. Put the microphone close enough t
 2. Select this `chrome-extension` directory. Alternatively, run `npm run package`, extract `dist/sonos-tab-caster.zip`, and load the extracted directory.
 3. Open a playing YouTube or Plex tab and click **Sonos Tab Caster** in Chrome's toolbar.
 4. Paste the token from `--show-browser-token`, click **Pair**, choose a discovered Sonos room, then click **Cast current tab**.
-5. Wait for the audible automatic calibration signal. The popup shows the raw measured delay. **Run audible calibration** repeats the measurement; **Manual adjustment** changes video delay immediately without repeating it.
+5. In Elgato Remote mode, click **Calibrate & apply** while casting. A successful measurement immediately sets the video delay and resets the previous manual adjustment to zero; a failed measurement keeps your existing settings. The popup shows the measured delay and the resulting video delay. You can fine-tune it afterwards using **Manual adjustment** and **Apply**. In standalone legacy mode, wait for automatic calibration or click **Run audible calibration**; that mode retains its saved manual adjustment.
 
 The companion must already be running. Pairing or Cast does not launch a Windows executable.
 

@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ManagedBackground } from '../managed-background.js';
 const state = { type: 'state', instanceId: 'i', revision: 1, generation: 1, source: 'chrome', phase: 'idle', rendererId: 'room', renderers: [], measuredDelayMs: 0, manualOffsetMs: 0, capabilities: {} };
+
+test('completed calibration immediately updates the captured tab without another Apply click', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.tabId = 42;
+  const delays = [];
+  h.chrome.tabs.sendMessage = async (tabId, message) => delays.push({ tabId, ...message });
+  await h.background.event({ ...state, phase: 'streaming', revision: 2, manualOffsetMs: 5000 });
+  await h.background.event({ ...state, phase: 'streaming', revision: 3, measuredDelayMs: 513, manualOffsetMs: 0 });
+  assert.deepEqual(delays, [
+    { tabId: 42, type: 'video-delay:set', milliseconds: 5000 },
+    { tabId: 42, type: 'video-delay:set', milliseconds: 513 },
+  ]);
+});
 function harness() {
   const calls = [];
   const chrome = { storage: { local: { set: async () => {} } }, tabs: { query: async () => [{ id: 42, url: 'https://www.youtube.com/watch?v=test' }], sendMessage: async (tab, message) => calls.push(message.type), get: async () => ({ id: 42, url: 'https://www.youtube.com/watch?v=test' }) }, tabCapture: { getMediaStreamId: async () => { calls.push('grant'); return 'grant'; } } };
