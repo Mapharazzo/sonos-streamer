@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { parseArgs } from 'node:util';
+import { releaseIdentity } from './release-identity.mjs';
 
 import { verifyExtension } from './verify-extension.mjs';
 
@@ -8,6 +10,8 @@ const extensionRoot = path.resolve(import.meta.dirname, '..');
 const outputPath = path.join(extensionRoot, 'dist', 'sonos-tab-caster.zip');
 const EXCLUDED = new Set(['dist', 'node_modules', 'tests', 'tools']);
 const RUNTIME_EXTENSIONS = new Set(['.css', '.html', '.ico', '.js', '.json', '.png', '.svg']);
+const { values } = parseArgs({ options: { channel: { type: 'string', default: 'development' }, 'store-key': { type: 'string' } } });
+const identity = releaseIdentity(JSON.parse(await readFile(path.join(extensionRoot, 'manifest.json'), 'utf8')), values.channel, values['store-key']);
 
 const verificationErrors = await verifyExtension(extensionRoot);
 if (verificationErrors.length > 0) {
@@ -17,13 +21,14 @@ if (verificationErrors.length > 0) {
 const entries = [];
 for (const absolute of await runtimeFiles(extensionRoot)) {
   const name = path.relative(extensionRoot, absolute).split(path.sep).join('/');
-  entries.push({ name, data: await readFile(absolute) });
+  entries.push({ name, data: name === 'manifest.json' ? Buffer.from(JSON.stringify(identity.manifest, null, 2) + '\n') : await readFile(absolute) });
 }
 entries.sort((left, right) => left.name.localeCompare(right.name));
 
 const archive = createZip(entries);
 await mkdir(path.dirname(outputPath), { recursive: true });
 await writeFile(outputPath, archive);
+await writeFile(path.join(extensionRoot, 'dist', 'browser-host-policy.json'), JSON.stringify(identity.policy) + '\n');
 const digest = createHash('sha256').update(archive).digest('hex');
 process.stdout.write(`Created dist/sonos-tab-caster.zip (${archive.length} bytes, sha256 ${digest})\n`);
 
