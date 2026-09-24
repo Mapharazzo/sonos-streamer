@@ -304,6 +304,13 @@ pub fn get_input_audio_devices() -> Vec<Device> {
 pub fn pick_input_cpal_device(name_substr: Option<&str>) -> Option<cpal::Device> {
     use log::warn;
     let host = cpal::default_host();
+    if let Some(id) = name_substr.and_then(|name| name.strip_prefix("id:")) {
+        // A selected device disappearing must not silently activate a different mic.
+        return host
+            .input_devices()
+            .ok()?
+            .find(|device| device.id().is_ok_and(|d| d.to_string() == id));
+    }
     if let Some(q) = name_substr.filter(|s| !s.is_empty()) {
         if let Ok(devs) = host.input_devices() {
             for dev in devs {

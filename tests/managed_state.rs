@@ -47,6 +47,62 @@ fn configured(source: Source) -> Session {
 }
 
 #[test]
+fn settings_reservation_excludes_playback_even_if_controller_disconnects() {
+    let mut session = configured(Source::Windows);
+    let native = caller("native", Role::Controller);
+    let browser = caller("browser", Role::Browser);
+    for owner in [&browser, &native] {
+        let reserve = command(
+            &session,
+            &format!("reserve-{}", owner.connection_id),
+            Action::PrepareSettings,
+        );
+        let result = session.apply(owner, reserve).0;
+        assert_eq!(
+            result.status,
+            if owner.role == Role::Browser {
+                Status::Rejected
+            } else {
+                Status::Ok
+            }
+        );
+    }
+    let start = command(&session, "start-blocked", Action::StartWindows);
+    assert_eq!(session.apply(&native, start).0.code, "settings-in-progress");
+    let release = command(&session, "foreign-release", Action::ReleaseSettings);
+    assert_eq!(
+        session
+            .apply(&caller("other", Role::Controller), release)
+            .0
+            .status,
+        Status::Rejected
+    );
+    let release = command(&session, "release", Action::ReleaseSettings);
+    assert_eq!(session.apply(&native, release).0.status, Status::Ok);
+    let reserve = command(&session, "reserve-again", Action::PrepareSettings);
+    assert_eq!(session.apply(&native, reserve).0.status, Status::Ok);
+    session.forget_controller("native");
+    let blocked = command(&session, "disconnected-start", Action::StartWindows);
+    assert_eq!(
+        session.apply(&native, blocked).0.code,
+        "settings-in-progress"
+    );
+    let release = command(
+        &session,
+        "release-after-disconnect",
+        Action::ReleaseSettings,
+    );
+    assert_eq!(session.apply(&native, release).0.status, Status::Ok);
+    let start = command(&session, "start", Action::StartWindows);
+    assert_eq!(session.apply(&native, start).0.status, Status::Ok);
+    let reserve = command(&session, "reserve-active", Action::PrepareSettings);
+    assert_eq!(
+        session.apply(&native, reserve).0.code,
+        "stop-playback-first"
+    );
+}
+
+#[test]
 fn startup_is_idle_and_cannot_capture_without_room_and_start() {
     let mut session = Session::new("instance-1".into());
     assert_eq!(session.snapshot().phase, Phase::Idle);

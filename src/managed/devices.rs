@@ -12,13 +12,59 @@ pub struct OutputDevice {
     device: cpal::Device,
     config: cpal::SupportedStreamConfig,
 }
+
+#[derive(serde::Serialize)]
+pub struct DeviceChoice {
+    pub id: String,
+    pub name: String,
+    pub direction: &'static str,
+}
+
+/// Enumerates metadata only. It never builds or starts an audio stream.
+pub fn list_devices() -> Result<Vec<DeviceChoice>, &'static str> {
+    let host = cpal::default_host();
+    let mut result = Vec::new();
+    for (direction, devices) in [
+        ("output", host.output_devices()),
+        ("input", host.input_devices()),
+    ] {
+        for device in devices.map_err(|_| "device-list-unavailable")?.take(32) {
+            if let (Ok(id), Ok(description)) = (device.id(), device.description()) {
+                let id = format!("id:{id}");
+                let name = description
+                    .extended()
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| description.name().to_owned());
+                if id.len() <= 512
+                    && name.len() <= 512
+                    && !id.chars().any(char::is_control)
+                    && !name.chars().any(char::is_control)
+                {
+                    result.push(DeviceChoice {
+                        id,
+                        name,
+                        direction,
+                    });
+                }
+            }
+        }
+    }
+    Ok(result)
+}
 impl OutputDevice {
     pub fn open(name: Option<&str>) -> Result<Self, &'static str> {
         let host = cpal::default_host();
         let device = if let Some(name) = name.filter(|n| !n.is_empty()) {
             host.output_devices()
                 .map_err(|_| "output-device-unavailable")?
-                .find(|device| device.description().is_ok_and(|d| d.name() == name))
+                .find(|device| {
+                    if let Some(id) = name.strip_prefix("id:") {
+                        device.id().is_ok_and(|d| d.to_string() == id)
+                    } else {
+                        device.description().is_ok_and(|d| d.name() == name)
+                    }
+                })
         } else {
             host.default_output_device()
         }

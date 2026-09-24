@@ -66,6 +66,8 @@ pub enum Action {
         milliseconds: i32,
     },
     GetState,
+    PrepareSettings,
+    ReleaseSettings,
     CaptureReleased {
         transition_id: String,
     },

@@ -1,5 +1,16 @@
-# Sonos Tab Caster prototype
+# Sonos Tab Caster
 
+## Elgato Remote (recommended)
+
+Install Elgato Remote on Windows. Its supervisor starts the Sonos companion automatically. Load the installed development extension from `%LOCALAPPDATA%\ElgatoRemote\sonos-extension\current`; remove the older development entry first. The fixed ID is `bhlhfokccmkkadhhhhkamndjfaekehjg`.
+
+The popup connects automatically through Chrome Native Messaging. No token is shown, copied or stored in managed extension storage. If the app is missing or was repaired, open it and click **Connect**. Choose a room and audio source, then explicitly click **Cast current tab** or **Start Windows audio**. Calibration still uses **Calibrate & apply**. Refresh open media tabs after extension updates.
+
+`npm run package` produces a development ZIP and matching native-host policy. Production packaging requires `node tools/package-extension.mjs --channel production --store-key <PUBLIC_BASE64_SPKI>` with the actual distinct store public key. Public signing/store publication remains a release prerequisite.
+
+## Standalone legacy prototype
+
+The following manual-token instructions apply only after explicitly choosing **Standalone tab caster (legacy)** in the popup.
 This unpacked Manifest V3 extension captures audio from the tab selected with its toolbar popup, sends 48 kHz stereo PCM to an explicitly running `swyh-rs-cli` process on `127.0.0.1`, and asks that process to play the existing WAV stream on one Sonos renderer. Chrome's tab-capture behavior suppresses that tab's normal local output; this extension does not reconnect it to the Windows speakers.
 
 For YouTube and Plex HTML5 video, the extension measures the Sonos path through the companion's microphone calibration and delays video frames by the measured latency plus a saved manual adjustment. The video implementation is repository-owned WebGL code; it does not import or copy another delay extension.

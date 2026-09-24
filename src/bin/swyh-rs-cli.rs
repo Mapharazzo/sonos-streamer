@@ -62,6 +62,16 @@ const BROWSER_STREAM_START_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_STREAM_END_GRACE: Duration = Duration::from_secs(2);
 
 fn main() -> Result<(), i32> {
+    if std::env::args().skip(1).collect::<Vec<_>>() == ["--list-managed-devices"] {
+        let audio = swyh_rs::managed::devices::list_devices().map_err(|_| 1)?;
+        let json = serde_json::to_string(&serde_json::json!({"version":1,"audio":audio}))
+            .map_err(|_| 1)?;
+        if json.len() > 65536 {
+            return Err(1);
+        }
+        println!("{json}");
+        return Ok(());
+    }
     let shutting_down = Arc::new(AtomicBool::new(false));
     // gracefully exit on Ctrl-C
     let shutdown = shutting_down.clone();

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 use super::protocol::{
     Action, Caller, Capabilities, Command, CommandResult, MAX_COUNTER, Phase, Role, Snapshot,
@@ -99,6 +100,8 @@ pub struct Session {
     producer_lease: Option<String>,
     play_requested: bool,
     transition: Option<Transition>,
+    settings_owner: Option<String>,
+    settings_deadline: Option<Instant>,
     cache: HashMap<String, VecDeque<(Command, CommandResult)>>,
 }
 
@@ -125,6 +128,8 @@ impl Session {
             producer_lease: None,
             play_requested: false,
             transition: None,
+            settings_owner: None,
+            settings_deadline: None,
             cache: HashMap::new(),
         }
     }
@@ -136,6 +141,8 @@ impl Session {
 
     pub fn forget_controller(&mut self, connection_id: &str) {
         self.cache.remove(connection_id);
+        // A lost controller may still be committing settings. Keep the short
+        // reservation until explicit release, engine restart, or expiry.
     }
     pub fn cached_result(&self, caller: &Caller, command: &Command) -> Option<CommandResult> {
         self.cache
@@ -225,7 +232,10 @@ impl Session {
         // An acknowledgment is scoped by its transition, not a changing display revision.
         let revision_independent = matches!(
             command.action,
-            Action::GetState | Action::CaptureReleased { .. } | Action::BrowserActionResult { .. }
+            Action::GetState
+                | Action::ReleaseSettings
+                | Action::CaptureReleased { .. }
+                | Action::BrowserActionResult { .. }
         );
         if !revision_independent && command.expected_revision != self.snapshot.revision {
             return Err("stale-revision");
@@ -269,7 +279,48 @@ impl Session {
         caller: &Caller,
         command: &Command,
     ) -> Result<Vec<Effect>, &'static str> {
+        if self
+            .settings_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.settings_owner = None;
+            self.settings_deadline = None;
+        }
+        if self.settings_owner.is_some()
+            && !matches!(
+                command.action,
+                Action::GetState
+                    | Action::ReleaseSettings
+                    | Action::BrowserStatus { .. }
+                    | Action::CaptureReleased { .. }
+                    | Action::BrowserActionResult { .. }
+            )
+        {
+            return Err("settings-in-progress");
+        }
         match &command.action {
+            Action::PrepareSettings => {
+                if caller.role != Role::Controller {
+                    return Err("controller-required");
+                }
+                if !matches!(self.snapshot.phase, Phase::Idle | Phase::Failed)
+                    || self.capture_owner.is_some()
+                    || self.transition.is_some()
+                {
+                    return Err("stop-playback-first");
+                }
+                self.settings_owner = Some(caller.connection_id.clone());
+                self.settings_deadline = Some(Instant::now() + Duration::from_secs(60));
+                Ok(vec![])
+            }
+            Action::ReleaseSettings => {
+                if self.settings_owner.as_deref() != Some(caller.connection_id.as_str()) {
+                    return Err("not-settings-owner");
+                }
+                self.settings_owner = None;
+                self.settings_deadline = None;
+                Ok(vec![])
+            }
             Action::GetState => Ok(vec![]),
             Action::SelectRenderer { renderer_id } => {
                 if !matches!(self.snapshot.phase, Phase::Idle | Phase::Failed)
@@ -631,6 +682,32 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abandoned_settings_reservation_expires() {
+        let mut session = Session::new("instance-1".into());
+        session.settings_owner = Some("lost-controller".into());
+        session.settings_deadline = Some(Instant::now() - Duration::from_secs(1));
+        let request = Command {
+            request_id: "after-expiry".into(),
+            instance_id: "instance-1".into(),
+            expected_revision: 1,
+            action: Action::SelectSource {
+                source: Source::Windows,
+            },
+        };
+        let result = session
+            .apply(
+                &Caller {
+                    connection_id: "other".into(),
+                    role: Role::Controller,
+                },
+                request,
+            )
+            .0;
+        assert_eq!(result.status, Status::Ok);
+        assert!(session.settings_owner.is_none());
+    }
 
     #[test]
     fn exhausted_counters_reject_mutations_instead_of_wrapping() {
