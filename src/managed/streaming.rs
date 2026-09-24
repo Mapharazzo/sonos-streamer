@@ -1,5 +1,5 @@
-//! Small bounded HTTP audio server. Socket deadlines make owned shutdown reliable
-//! even when a renderer stops reading in the middle of an unlimited WAV response.
+//! Small bounded HTTP audio server. Cancellable writes tolerate renderer buffering
+//! while keeping owned shutdown reliable during an unlimited WAV response.
 use super::audio::{AudioError, AudioHub};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use std::{
@@ -83,8 +83,16 @@ impl ManagedHttp {
                             if let Ok(join) = thread::Builder::new()
                                 .name("managed_wav".into())
                                 .spawn(move || {
-                                    let _ =
-                                        serve(socket, peer, &instance, &audio, &cancel, &sender);
+                                    if let Err(error) =
+                                        serve(socket, peer, &instance, &audio, &cancel, &sender)
+                                    {
+                                        // Fixed fields only: never log request URLs or headers.
+                                        eprintln!(
+                                            "managed_audio_connection_end kind={:?} os_code={:?}",
+                                            error.kind(),
+                                            error.raw_os_error()
+                                        );
+                                    }
                                 })
                             {
                                 workers.push(join);
@@ -216,6 +224,10 @@ fn serve(
         return Ok(());
     }
     socket.write_all(&wav_header(format.sample_rate))?;
+    // A blocking Winsock send timeout can leave the connection unusable. Use
+    // nonblocking partial writes so normal renderer buffering is recoverable.
+    socket.set_write_timeout(None)?;
+    socket.set_nonblocking(true)?;
     let _ = events.try_send(StreamEvent {
         kind: StreamEventKind::Started,
         generation,
@@ -227,7 +239,11 @@ fn serve(
                 Ok(samples) => samples,
                 Err(AudioError::Timeout) => {
                     // A renderer still needs an audio clock during output silence.
-                    socket.write_all(&vec![0; format.sample_rate as usize / 10 * 4])?;
+                    write_audio(
+                        &mut socket,
+                        &vec![0; format.sample_rate as usize / 10 * 4],
+                        || cancel.load(Ordering::Acquire) || !subscription.is_active(),
+                    )?;
                     continue;
                 }
                 Err(_) => break,
@@ -241,7 +257,9 @@ fn serve(
                 };
                 bytes.extend_from_slice(&pcm.to_le_bytes());
             }
-            socket.write_all(&bytes)?;
+            write_audio(&mut socket, &bytes, || {
+                cancel.load(Ordering::Acquire) || !subscription.is_active()
+            })?;
         }
         Ok(())
     })();
@@ -251,6 +269,35 @@ fn serve(
         peer,
     });
     outcome
+}
+
+fn write_audio(
+    writer: &mut impl Write,
+    mut bytes: &[u8],
+    cancelled: impl Fn() -> bool,
+) -> io::Result<()> {
+    let mut deadline = Instant::now() + Duration::from_secs(5);
+    while !bytes.is_empty() {
+        if cancelled() {
+            return Ok(());
+        }
+        match writer.write(bytes) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(count) => {
+                bytes = &bytes[count..];
+                deadline = Instant::now() + Duration::from_secs(5);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(io::ErrorKind::TimedOut.into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn wav_header(sample_rate: u32) -> [u8; 44] {
@@ -268,4 +315,44 @@ fn wav_header(sample_rate: u32) -> [u8; 44] {
     header[36..40].copy_from_slice(b"data");
     header[40..44].copy_from_slice(&(u32::MAX - 44).to_le_bytes());
     header
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct BufferingWriter {
+        calls: usize,
+        bytes: Vec<u8>,
+    }
+    impl Write for BufferingWriter {
+        fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.calls == 2 {
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            let count = input.len().min(3);
+            self.bytes.extend_from_slice(&input[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn partial_write_retry_preserves_pcm_bytes_exactly() {
+        let mut writer = BufferingWriter::default();
+        write_audio(&mut writer, b"0123456789", || false).unwrap();
+        assert_eq!(writer.bytes, b"0123456789");
+    }
+
+    #[test]
+    fn retired_stream_stops_before_writing_more_audio() {
+        let mut writer = BufferingWriter::default();
+        write_audio(&mut writer, b"0123456789", || true).unwrap();
+        assert!(writer.bytes.is_empty());
+        assert_eq!(writer.calls, 0);
+    }
 }

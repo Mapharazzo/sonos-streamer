@@ -217,3 +217,47 @@ fn disconnected_consumers_release_slots_without_waiting_for_audio() {
         drop(subscription);
     }
 }
+
+#[test]
+fn renderer_buffering_pause_does_not_close_the_stream() {
+    let hub = Arc::new(AudioHub::new());
+    let mut server = ManagedHttp::bind(
+        "127.0.0.1:0".parse().unwrap(),
+        "buffering".into(),
+        Arc::clone(&hub),
+    )
+    .unwrap();
+    let sink = hub.begin(1, format(48000)).unwrap();
+    let (mut reader, _) = request(server.local_addr(), "/managed/buffering/1/stream.wav");
+    assert_eq!(
+        server
+            .events()
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .kind,
+        StreamEventKind::Started
+    );
+    // Fill the TCP buffers without making the test depend on their OS size.
+    let producer = std::thread::spawn(move || {
+        let samples = Arc::new(vec![0.25; 32768]);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            sink.publish(Arc::clone(&samples)).unwrap();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    producer.join().unwrap();
+    assert!(
+        server.events().try_recv().is_err(),
+        "buffering is not a disconnect"
+    );
+    let mut data = [0; 65536];
+    let deadline = Instant::now() + Duration::from_millis(400);
+    while Instant::now() < deadline {
+        assert!(
+            reader.read(&mut data).unwrap() > 0,
+            "stream ended after buffering"
+        );
+    }
+    server.shutdown();
+}

@@ -201,6 +201,11 @@ impl Drop for AudioSubscription {
 
 impl AudioSubscription {
     #[must_use]
+    pub fn is_active(&self) -> bool {
+        !self.active.retired.load(Ordering::Acquire)
+    }
+
+    #[must_use]
     pub fn format(&self) -> WavData {
         self.active.format
     }
