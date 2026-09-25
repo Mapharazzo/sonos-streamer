@@ -5,6 +5,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApPgL47WyXxb6yTMhgoDbcn1viTM+VwYI7QRBW/jlU0ekkYfuBXuH9UmX+giNhgcEuOtg2Pyck1GQIz7wZKGnFo6FeyXAn2mXk8LAaHm0Sd2dGlEk4op5pXK/Oow9mkHj1KwLGninZjAzKlB4MYZoqv0RodKhYUwg23Wcik5oFuMcbJuf1vx1W+4phXV8FrQdHaaVpteOjDP6KGy9XHjBt0p8HPLuWAV14T2iKHeMuT1ChF6EckFb6d4hM0/ySqnbnIw9wcZi4tLRsGrLOG3TrRZXA8OVayjw9+3qtcVUGAnlAWR55RrZOjeS9NUhgsObHaSeI9z849QaSjOMew4ZmwIDAQAB",
   "description": "Cast the current tab's audio to a local Sonos renderer with calibrated video delay.",
   "minimum_chrome_version": "116",
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
   "permissions": ["activeTab",
     "nativeMessaging", "offscreen", "scripting", "storage", "tabCapture"],
   "host_permissions": [
@@ -18,6 +19,7 @@
     "type": "module"
   },
   "action": {
+    "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png" },
     "default_popup": "popup.html",
     "default_title": "Cast tab to Sonos"
   },
