@@ -233,17 +233,22 @@ fn serve(
         generation,
         peer,
     });
+    let mut silence_start = Instant::now();
+    let mut silence_frames = 0_u64;
     let outcome = (|| {
         while !cancel.load(Ordering::Acquire) {
             let samples = match subscription.recv_timeout(Duration::from_millis(100)) {
                 Ok(samples) => samples,
                 Err(AudioError::Timeout) => {
-                    // A renderer still needs an audio clock during output silence.
-                    write_audio(
-                        &mut socket,
-                        &vec![0; format.sample_rate as usize / 10 * 4],
-                        || cancel.load(Ordering::Acquire) || !subscription.is_active(),
-                    )?;
+                    let frames = silence_frames_due(
+                        format.sample_rate,
+                        silence_start.elapsed(),
+                        silence_frames,
+                    );
+                    write_audio(&mut socket, &vec![0; frames as usize * 4], || {
+                        cancel.load(Ordering::Acquire) || !subscription.is_active()
+                    })?;
+                    silence_frames += u64::from(frames);
                     continue;
                 }
                 Err(_) => break,
@@ -260,6 +265,8 @@ fn serve(
             write_audio(&mut socket, &bytes, || {
                 cancel.load(Ordering::Acquire) || !subscription.is_active()
             })?;
+            silence_start = Instant::now();
+            silence_frames = 0;
         }
         Ok(())
     })();
@@ -269,6 +276,15 @@ fn serve(
         peer,
     });
     outcome
+}
+
+fn silence_frames_due(sample_rate: u32, elapsed: Duration, emitted: u64) -> u32 {
+    // Timed waits are a minimum delay, particularly on Windows. Track the
+    // monotonic audio clock so late wakeups do not slowly drain Sonos's buffer.
+    // Bound allocation/catchup if the renderer previously stalled its reads.
+    let due = elapsed.as_nanos() * u128::from(sample_rate) / 1_000_000_000;
+    due.saturating_sub(u128::from(emitted))
+        .min(u128::from(sample_rate)) as u32
 }
 
 fn write_audio(
@@ -354,5 +370,35 @@ mod tests {
         write_audio(&mut writer, b"0123456789", || true).unwrap();
         assert!(writer.bytes.is_empty());
         assert_eq!(writer.calls, 0);
+    }
+
+    #[test]
+    fn silence_clock_covers_elapsed_time_instead_of_counting_wakeups() {
+        for rate in [8000, 44100, 48000, 192000] {
+            let mut emitted = 0_u64;
+            // Windows timed waits can wake late. Repeatedly sending exactly
+            // 100 ms produces less audio than the renderer consumes.
+            for elapsed_ms in [113, 225, 341, 457, 570, 685, 799, 913, 1028] {
+                emitted += u64::from(silence_frames_due(
+                    rate,
+                    Duration::from_millis(elapsed_ms),
+                    emitted,
+                ));
+                assert_eq!(emitted, elapsed_ms * u64::from(rate) / 1000);
+            }
+        }
+    }
+
+    #[test]
+    fn silence_clock_bounds_catchup_and_never_repeats_frames() {
+        assert_eq!(
+            silence_frames_due(48000, Duration::from_millis(100), 4800),
+            0
+        );
+        assert_eq!(
+            silence_frames_due(48000, Duration::from_millis(90), 4800),
+            0
+        );
+        assert_eq!(silence_frames_due(48000, Duration::from_secs(20), 0), 48000);
     }
 }
