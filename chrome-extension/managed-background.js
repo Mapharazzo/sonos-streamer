@@ -1,4 +1,4 @@
-import { isSupportedMediaUrl } from './shared/background-state.js';
+import { isCapturableTabUrl, isSupportedMediaUrl } from './shared/background-state.js';
 import { CaptureLifecycle } from './shared/managed-state.js';
 import { effectiveDelay } from './shared/session-state.js';
 import { reloadSelectedTab, shortcutStatus } from './shared/recovery.js';
@@ -10,6 +10,7 @@ export class ManagedBackground {
     this.token = ''; this.plexOrigins = []; this.snapshot = null; this.connected = false; this.tabId = null; this.warning = null; this.videoTabId = null; this.counters = {};
     this.recoveryTab = null; this.recoveryRunning = false; this.lastBrowserStatus = ''; this.statusPending = false;
     this.pendingTab = null;
+    this.videoDelaySupported = false;
     this.active = true; this.bootstrapEpoch = 0; this.bootstrapPending = null; this.authRefreshed = false; this.setupStatus = 'connecting';
     this.lifecycle = new CaptureLifecycle({
       disposeAudio: () => this.sendOffscreen({ type: 'managed-stop' }),
@@ -55,12 +56,18 @@ export class ManagedBackground {
     if (!this.active || epoch !== this.bootstrapEpoch) return;
     const state = await this.sendOffscreen({ type: 'managed-connect', token });
     if (!this.active || epoch !== this.bootstrapEpoch) return;
-    this.connected = Boolean(state?.connected); this.snapshot = state?.snapshot ?? null; this.tabId = state?.capturing ? state.tabId : null; this.videoTabId = this.tabId;
+    this.connected = Boolean(state?.connected); this.snapshot = state?.snapshot ?? null; this.tabId = state?.capturing ? state.tabId : null;
+    if (Number.isInteger(this.tabId)) {
+      const tab = await this.chrome.tabs.get(this.tabId).catch(() => null);
+      if (!this.active || epoch !== this.bootstrapEpoch) return;
+      this.videoDelaySupported = isSupportedMediaUrl(tab?.url, this.plexOrigins);
+    }
+    this.videoTabId = this.videoDelaySupported ? this.tabId : null;
     this.publish();
   }
   publicState() {
     const state = this.snapshot;
-    return { mode: 'managed', setupStatus: this.setupStatus, connected: this.connected, paired: this.connected && Boolean(state), plexOrigins: this.plexOrigins, phase: state?.phase ?? 'disconnected', source: state?.source ?? 'chrome', selectedRendererId: state?.rendererId ?? null, renderers: state?.renderers ?? [], volume: state?.volume ?? null, measuredDelayMs: state?.measuredDelayMs ?? 0, manualOffsetMs: state?.manualOffsetMs ?? 0, capabilities: state?.capabilities ?? {}, warning: this.warning ?? state?.errorCode, tabId: this.tabId, counters: this.counters, cleanupPending: this.lifecycle.busy || this.recoveryRunning };
+    return { mode: 'managed', videoDelaySupported: this.videoDelaySupported, setupStatus: this.setupStatus, connected: this.connected, paired: this.connected && Boolean(state), plexOrigins: this.plexOrigins, phase: state?.phase ?? 'disconnected', source: state?.source ?? 'chrome', selectedRendererId: state?.rendererId ?? null, renderers: state?.renderers ?? [], volume: state?.volume ?? null, measuredDelayMs: state?.measuredDelayMs ?? 0, manualOffsetMs: state?.manualOffsetMs ?? 0, capabilities: state?.capabilities ?? {}, warning: this.warning ?? state?.errorCode, tabId: this.tabId, counters: this.counters, cleanupPending: this.lifecycle.busy || this.recoveryRunning };
   }
   publish() { this.onState(this.publicState()); }
   async command(action) { return this.sendOffscreen({ type: 'managed-command', action }); }
@@ -78,8 +85,12 @@ export class ManagedBackground {
       case 'cast': if (this.snapshot?.source === 'windows') await this.command({ type: 'start-windows' }); else await this.cast(); break;
       case 'stop': await this.command({ type: 'stop' }); break;
       case 'set-volume': await this.command({ type: 'set-volume', value: message.value }); break;
-      case 'calibrate': await this.command({ type: 'calibrate' }); break;
-      case 'set-offset': await this.command({ type: 'set-offset', milliseconds: message.milliseconds }); break;
+      case 'calibrate':
+        if (!this.videoDelaySupported) throw new Error('This tab uses audio-only capture; video calibration is unavailable');
+        await this.command({ type: 'calibrate' }); break;
+      case 'set-offset':
+        if (!this.videoDelaySupported) throw new Error('This tab uses audio-only capture; video delay is unavailable');
+        await this.command({ type: 'set-offset', milliseconds: message.milliseconds }); break;
       case 'reload-tab': await this.reload(); break;
       default: throw new Error('Unknown managed command');
     }
@@ -90,7 +101,8 @@ export class ManagedBackground {
     return this.lifecycle.start(async (check) => {
       if (!this.connected || !this.snapshot?.rendererId || this.snapshot.source !== 'chrome' || !['idle', 'failed'].includes(this.snapshot.phase)) throw new Error('Select Chrome and a Sonos room before casting');
       const tab = invokedTab ?? (await this.chrome.tabs.query({ active: true, currentWindow: true }))[0]; check();
-      if (!Number.isInteger(tab?.id) || !isSupportedMediaUrl(tab.url, this.plexOrigins)) throw new Error('Open YouTube or Plex in the active tab');
+      if (!Number.isInteger(tab?.id) || !isCapturableTabUrl(tab.url)) throw new Error('Open an ordinary HTTP or HTTPS web page to cast audio');
+      this.videoDelaySupported = isSupportedMediaUrl(tab.url, this.plexOrigins);
       const pending = { id: tab.id, url: tab.url };
       this.pendingTab = pending;
       try {
@@ -171,6 +183,10 @@ export class ManagedBackground {
   }
   async applyVideoDelay() {
     const tabId = this.tabId; const generation = this.snapshot.generation;
+    const tab = await this.chrome.tabs.get(tabId).catch(() => null);
+    if (this.tabId !== tabId || this.snapshot?.generation !== generation) return;
+    this.videoDelaySupported = isSupportedMediaUrl(tab?.url, this.plexOrigins);
+    if (!this.videoDelaySupported) return;
     const milliseconds = effectiveDelay(this.snapshot.measuredDelayMs, this.snapshot.manualOffsetMs);
     try {
       await this.chrome.tabs.sendMessage(tabId, { type: 'video-delay:set', milliseconds });
@@ -188,11 +204,12 @@ export class ManagedBackground {
     try {
       const binding = shortcutStatus(await this.chrome.commands?.getAll() ?? []);
       const [tab] = await this.chrome.tabs.query({ active: true, currentWindow: true });
+      if (!Number.isInteger(this.tabId) && !this.pendingTab) this.videoDelaySupported = isSupportedMediaUrl(tab?.url, this.plexOrigins);
       if (this.recoveryTab) {
         const recovery = await this.chrome.tabs.get(this.recoveryTab.tabId).catch(() => null);
         if (!recovery?.url || new URL(recovery.url).origin !== this.recoveryTab.origin) this.recoveryTab = null;
       }
-      const action = { type: 'browser-status', shortcut: binding.shortcut, supportedTab: isSupportedMediaUrl(tab?.url, this.plexOrigins), hasRecoveryTab: Boolean(this.recoveryTab) };
+      const action = { type: 'browser-status', shortcut: binding.shortcut, supportedTab: isCapturableTabUrl(tab?.url), hasRecoveryTab: Boolean(this.recoveryTab) };
       const signature = JSON.stringify(action);
       if (signature !== this.lastBrowserStatus) { this.lastBrowserStatus = signature; await this.command(action); }
     } catch { this.lastBrowserStatus = ''; }
@@ -221,6 +238,7 @@ export class ManagedBackground {
             const tab = await this.chrome.tabs.get(id);
             if (!tab.url || new URL(tab.url).origin !== origin) throw new Error('tab-changed');
             if (tab.status === 'complete') {
+              if (!isSupportedMediaUrl(tab.url, this.plexOrigins)) return;
               const ready = await this.chrome.tabs.sendMessage(id, { type: 'recovery:ready' }).catch(() => null);
               if (ready?.ready) return;
             }

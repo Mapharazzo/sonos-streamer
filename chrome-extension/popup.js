@@ -91,6 +91,7 @@ async function runCommand(command, fields = {}) {
 function render(nextState) {
   state = nextState;
   const managed = state.mode === 'managed';
+  const audioOnly = state.videoDelaySupported === false;
   elements.reload.hidden = !managed;
   elements.reload.disabled = busy || !state.paired || state.cleanupPending || state.source !== 'chrome' || !state.capabilities?.browserCanReload;
   elements.shortcut.textContent = !managed ? '' : state.capabilities?.shortcut ? `Chrome shortcut: ${state.capabilities.shortcut}` : 'Cast shortcut unassigned or unavailable. Check chrome://extensions/shortcuts.';
@@ -107,9 +108,9 @@ function render(nextState) {
   renderConnection();
   renderRenderers();
   elements.measured.value = `${state.measuredDelayMs ?? 0} ms`;
-  elements.videoDelay.value = managed && state.source !== 'chrome' ? 'Not used for Windows audio' : `${effectiveDelay(state.measuredDelayMs ?? 0, state.manualOffsetMs ?? 0)} ms`;
+  elements.videoDelay.value = managed && state.source !== 'chrome' ? 'Not used for Windows audio' : audioOnly ? 'Audio only — no video delay' : `${effectiveDelay(state.measuredDelayMs ?? 0, state.manualOffsetMs ?? 0)} ms`;
   elements.calibrate.textContent = managed ? 'Calibrate & apply' : 'Run audible calibration';
-  elements.calibrationHint.textContent = managed
+  elements.calibrationHint.textContent = audioOnly ? 'This tab streams audio only. Video sync is available on YouTube and Plex; Sonos playback still has its normal buffering delay.' : managed
     ? 'Plays a timing signal, then automatically applies the measured video delay and resets manual adjustment to 0. You can fine-tune it afterwards.'
     : 'Calibration briefly plays a timing signal through the selected speaker.';
   elements.packets.value = `${state.counters?.receivedPackets ?? 0} sent, ${state.counters?.droppedPackets ?? 0} dropped`;
@@ -121,8 +122,9 @@ function render(nextState) {
   elements.mode.disabled = busy || castActive;
   elements.cast.disabled = busy || state.cleanupPending || !pairedWithRenderer || !['idle', 'failed'].includes(state.phase);
   elements.stop.disabled = busy || !state.paired || !['starting', 'streaming', 'calibrating', 'failed', 'switching'].includes(state.phase);
-  elements.calibrate.disabled = busy || state.phase !== 'streaming' || (managed && !state.capabilities?.calibrationAvailable);
-  elements.applyOffset.disabled = busy || !state.connected || !state.paired || !state.selectedRendererId || (managed && state.source !== 'chrome');
+  elements.calibrate.disabled = busy || audioOnly || state.phase !== 'streaming' || (managed && !state.capabilities?.calibrationAvailable);
+  elements.offset.disabled = audioOnly || (managed && state.source !== 'chrome');
+  elements.applyOffset.disabled = busy || audioOnly || !state.connected || !state.paired || !state.selectedRendererId || (managed && state.source !== 'chrome');
   elements.renderer.disabled ||= castActive;
 }
 

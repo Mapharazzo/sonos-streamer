@@ -1,6 +1,7 @@
 import {
   canChangeRenderer,
   canStartCast,
+  isSupportedMediaUrl,
   normalizePlexOrigin,
   terminalEventReason,
   validateCastRequest,
@@ -146,7 +147,11 @@ async function handlePopupMessage(message) {
     if (message.command === 'register-plex-origin') { await registerPlexOrigin(message.origin); managed.plexOrigins = plexOrigins; return managed.publicState(); }
     return managed.popup(message);
   }
-  if (message.type === 'state-request') return publicState();
+  if (message.type === 'state-request') {
+    const tab = Number.isInteger(session.tabId) ? await chrome.tabs.get(session.tabId).catch(() => null) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    session.videoDelaySupported = isSupportedMediaUrl(tab?.url, plexOrigins);
+    return publicState();
+  }
   const command = message.command;
   switch (command) {
     case 'pair':
@@ -159,6 +164,7 @@ async function handlePopupMessage(message) {
       await stopCapture('user-stop');
       return publicState();
     case 'calibrate':
+      if (session.videoDelaySupported === false) throw new Error('This tab uses audio-only capture; video calibration is unavailable');
       await sendOffscreen({
         type: 'browser-command',
         commandType: 'calibrate',
@@ -166,6 +172,7 @@ async function handlePopupMessage(message) {
       });
       return publicState();
     case 'set-offset':
+      if (session.videoDelaySupported === false) throw new Error('This tab uses audio-only capture; video delay is unavailable');
       await applyManualOffset(message.milliseconds);
       await sendOffscreen({
         type: 'browser-command',
@@ -222,6 +229,7 @@ async function castActiveTab() {
   if (errors.length > 0) throw new Error(castValidationMessage(errors));
   if (!session.connected || !session.paired) throw new Error('Pair with the local Sonos app first');
 
+  session.videoDelaySupported = isSupportedMediaUrl(tab.url, plexOrigins);
   return startCapture(tab.id, session.selectedRendererId);
 }
 
@@ -421,6 +429,9 @@ async function sendCurrentVideoDelay() {
 
 async function sendVideoDelay(milliseconds) {
   if (!Number.isInteger(session.tabId)) return;
+  const tab = await chrome.tabs.get(session.tabId).catch(() => null);
+  session.videoDelaySupported = isSupportedMediaUrl(tab?.url, plexOrigins);
+  if (!session.videoDelaySupported) return;
   try {
     const status = await chrome.tabs.sendMessage(session.tabId, {
       type: 'video-delay:set',
@@ -488,7 +499,7 @@ function castValidationMessage(errors) {
   const messages = {
     'pairing-token': 'Enter the local app pairing token',
     renderer: 'Choose a Sonos renderer',
-    'unsupported-tab': 'Open YouTube or Plex in the active tab',
+    'unsupported-tab': 'Open an ordinary HTTP or HTTPS web page to cast audio',
   };
   return errors.map((error) => messages[error]).join('; ');
 }

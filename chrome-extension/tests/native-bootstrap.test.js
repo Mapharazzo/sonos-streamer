@@ -53,7 +53,22 @@ test('missing host can recover on explicit Connect', async () => {
 });
 test('worker bootstrap restores surviving offscreen capture without acquiring a grant', async () => {
   const h = harness();
+  h.chrome.tabs = { get: async () => ({ id: 42, url: 'https://www.youtube.com/watch?v=test' }) };
   h.background.sendOffscreen = async (message) => { h.sent.push(message); return { connected: true, snapshot: { phase: 'streaming' }, capturing: true, tabId: 42 }; };
   await h.background.bootstrap();
   assert.equal(h.background.tabId, 42); assert.deepEqual(h.sent.map((m) => m.type), ['managed-connect']);
+  assert.equal(h.background.setupStatus, 'connected');
+  assert.equal(h.background.videoTabId, 42);
+});
+
+test('worker restart restores generic audio capture without inventing a video controller', async () => {
+  const h = harness();
+  h.chrome.tabs = { get: async () => ({ id: 42, url: 'https://example.org/music' }) };
+  h.background.sendOffscreen = async (message) => { h.sent.push(message); return { connected: true, snapshot: { phase: 'streaming' }, capturing: true, tabId: 42 }; };
+  await h.background.bootstrap();
+  assert.equal(h.background.setupStatus, 'connected');
+  assert.equal(h.background.tabId, 42);
+  assert.equal(h.background.videoTabId, null);
+  assert.equal(h.background.publicState().videoDelaySupported, false);
+  assert.deepEqual(h.sent.map((m) => m.type), ['managed-connect']);
 });

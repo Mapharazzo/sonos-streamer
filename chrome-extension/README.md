@@ -6,6 +6,8 @@ Install Elgato Remote on Windows. Its supervisor starts the Sonos companion auto
 
 The popup connects automatically through Chrome Native Messaging. No token is shown, copied or stored in managed extension storage. If the app is missing or was repaired, open it and click **Connect**. Choose a room and audio source, then explicitly click **Cast current tab** or **Start Windows audio**. Calibration still uses **Calibrate & apply**. Refresh open media tabs after extension updates.
 
+Ordinary HTTP/HTTPS tabs can cast audio with no video-delay script or additional site permission. The popup shows **Audio only — no video delay** and disables video calibration/manual adjustment for these tabs. Sonos still buffers playback; this mode does not promise zero audio latency. YouTube and Plex retain their video-sync controls. Chrome internal pages, extension pages, local files, and the Chrome Web Store cannot be selected for this mode. Chrome may also reject capture of protected content.
+
 `npm run package` produces a development ZIP and matching native-host policy. Production packaging requires `node tools/package-extension.mjs --channel production --store-key <PUBLIC_BASE64_SPKI>` with the actual distinct store public key. Public signing/store publication remains a release prerequisite.
 
 ## Standalone legacy prototype
@@ -43,7 +45,7 @@ Omit `--mic` to use the Windows default input. Put the microphone close enough t
 
 1. Open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked**.
 2. Select this `chrome-extension` directory. Alternatively, run `npm run package`, extract `dist/sonos-tab-caster.zip`, and load the extracted directory.
-3. Open a playing YouTube or Plex tab and click **Sonos Tab Caster** in Chrome's toolbar.
+3. Open a playing web tab and click **Sonos Tab Caster** in Chrome's toolbar. Use YouTube or Plex for video sync.
 4. Paste the token from `--show-browser-token`, click **Pair**, choose a discovered Sonos room, then click **Cast current tab**.
 5. In Elgato Remote mode, click **Calibrate & apply** while casting. A successful measurement immediately sets the video delay and resets the previous manual adjustment to zero; a failed measurement keeps your existing settings. The popup shows the measured delay and the resulting video delay. You can fine-tune it afterwards using **Manual adjustment** and **Apply**. In standalone legacy mode, wait for automatic calibration or click **Run audible calibration**; that mode retains its saved manual adjustment.
 
@@ -73,7 +75,7 @@ Never paste the pairing token into logs or issue reports.
 ## Standalone prototype limits
 
 - One producing extension session, one captured tab, and one selected renderer at a time.
-- YouTube, hosted Plex, and explicitly granted self-hosted Plex only.
+- Video sync supports YouTube, hosted Plex, and explicitly granted self-hosted Plex. Other ordinary web tabs support audio-only capture.
 - Video capture at no more than 30 FPS and 1920×1080, with a 512 MiB estimated texture budget.
 - Effective video delay clamped to 0–5000 ms; budget fallback refuses scaling below 640×360.
 - No protected-video bypass, PC-wide audio capture, system audio-delay driver, native-app auto-launch, Chrome Web Store signing, or unattended background service.
@@ -93,19 +95,21 @@ resume. Reload never manufactures a tab capture grant: press Cast or the shortcu
 again after the reload. Closing/navigating away from the selected tab cancels
 recovery. The recovery tab is kept only for the current Chrome browser session.
 
-Choose **Elgato Remote** in the popup, paste the private Sonos pairing token from
-the Windows client and click Pair. Pairing keeps shared controls connected without
+Choose **Elgato Remote** in the popup; it connects automatically to the installed
+Windows client. Pairing keeps shared controls connected without
 capturing audio. Choose a room and **Chrome tab** or **All Windows audio**. Changing
 source stops playback; click Cast or Start afterward. Stop preserves the control
 connection. The Windows client and Stream Deck share the same source and room.
 
 The coordinated Windows installer provides the unpacked extension at
 `%LOCALAPPDATA%\ElgatoRemote\sonos-extension\current`. Load that directory once
-from `chrome://extensions` in Developer mode, then run the installed
-`copy-sonos-pairing-code.ps1` to copy the private code for pairing. After upgrades,
+from `chrome://extensions` in Developer mode. No pairing code is needed. After upgrades,
 Reload the extension card; keep the same directory to preserve its identity.
 Managed mode supports all Windows audio through the companion; the standalone
 prototype limits above apply to the legacy connection.
+
+On generic audio-only tabs, Reload / Retry waits for the page to load without a
+video adapter; resume the site's playback manually and press Cast again.
 
 **Standalone tab caster (legacy)** explicitly selects the original `/browser/v1`
 companion. Supply that companion's token when changing connection modes. The

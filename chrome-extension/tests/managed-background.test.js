@@ -27,6 +27,41 @@ function harness() {
   const background = new ManagedBackground({ chrome, ensureOffscreen: async () => {}, sendOffscreen: (message) => engine(message), onState: () => {} });
   return { background, chrome, calls };
 }
+
+test('generic tab capture needs no content script, video delay, or calibration', async () => {
+  const h = harness();
+  const tab = { id: 42, url: 'http://127.0.0.1:58503/', status: 'complete' };
+  h.chrome.tabs.query = async () => [tab]; h.chrome.tabs.get = async () => tab;
+  h.chrome.tabs.sendMessage = async () => { throw new Error('No content script'); };
+  await h.background.restore('a'.repeat(64), []);
+  await h.background.cast();
+  await h.background.event({ ...state, phase: 'streaming', revision: 2, measuredDelayMs: 5000 });
+  assert.equal(h.background.publicState().videoDelaySupported, false);
+  assert.equal(h.background.warning, null);
+  assert.equal(h.background.videoTabId, null);
+  await assert.rejects(h.background.popup({ command: 'calibrate' }), /audio-only/i);
+  await h.background.event({ type: 'release-capture', transitionId: 'generic-stop' });
+  assert.equal(h.calls.includes('capture-released'), true);
+});
+
+test('generic reload completes without a video adapter and never starts capture', async () => {
+  const h = harness();
+  const tab = { id: 42, url: 'https://example.org/music', status: 'complete' };
+  h.chrome.tabs.query = async () => [tab]; h.chrome.tabs.get = async () => tab;
+  h.chrome.tabs.sendMessage = async () => { throw new Error('No content script'); };
+  h.chrome.tabs.reload = async () => h.calls.push('reload');
+  await h.background.restore('a'.repeat(64), []);
+  h.background.recoveryTab = { tabId: 42, origin: 'https://example.org' };
+  await h.background.reload();
+  assert.equal(h.calls.includes('reload'), true);
+  assert.equal(h.calls.includes('grant'), false);
+});
+
+test('protected pages are rejected before requesting a capture grant', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  await assert.rejects(h.background.cast({ id: 42, url: 'chrome://settings' }), /web page/i);
+  assert.equal(h.calls.includes('grant'), false);
+});
 test('pair/reconnect opens only control and Cast explicitly gets capture grant', async () => {
   const h = harness(); await h.background.restore('a'.repeat(64), []);
   assert.deepEqual(h.calls, ['managed-connect']);

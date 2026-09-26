@@ -31,6 +31,16 @@ test('registered self-hosted Plex origins are supported exactly', () => {
   assert.equal(isSupportedMediaUrl('https://evil.example.test/', registeredPlexOrigins), false);
 });
 
+test('ordinary web tabs can cast audio without becoming video-delay sites', () => {
+  for (const url of ['https://example.org/music', 'http://127.0.0.1:58503/']) {
+    assert.deepEqual(validateCastRequest({ token: 'secret', rendererId: 'room', url }), []);
+    assert.equal(isSupportedMediaUrl(url), false);
+  }
+  for (const url of ['chrome://settings', 'chrome-extension://id/page.html', 'file:///audio.html', 'https://chromewebstore.google.com/detail/test', 'https://chrome.google.com/webstore/detail/test']) {
+    assert.deepEqual(validateCastRequest({ token: 'secret', rendererId: 'room', url }), ['unsupported-tab']);
+  }
+});
+
 test('Plex origin registration accepts only http or https origins', () => {
   assert.equal(normalizePlexOrigin('HTTPS://Media.Example.test:32400/web'), 'https://media.example.test:32400');
   assert.throws(() => normalizePlexOrigin('file:///media/index.html'), /http/i);

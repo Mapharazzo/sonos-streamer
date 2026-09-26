@@ -35,11 +35,20 @@ export function isSupportedMediaUrl(value, registeredPlexOrigins = []) {
   return registeredPlexOrigins.includes(url.origin);
 }
 
-export function validateCastRequest({ token, rendererId, url, registeredPlexOrigins = [] }) {
+export function isCapturableTabUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    return url.hostname !== 'chromewebstore.google.com' &&
+      !(url.hostname === 'chrome.google.com' && /^\/webstore(?:\/|$)/.test(url.pathname));
+  } catch { return false; }
+}
+
+export function validateCastRequest({ token, rendererId, url }) {
   const errors = [];
   if (typeof token !== 'string' || token.trim().length === 0) errors.push('pairing-token');
   if (typeof rendererId !== 'string' || rendererId.length === 0) errors.push('renderer');
-  if (!isSupportedMediaUrl(url, registeredPlexOrigins)) errors.push('unsupported-tab');
+  if (!isCapturableTabUrl(url)) errors.push('unsupported-tab');
   return errors;
 }
 
