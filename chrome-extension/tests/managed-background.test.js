@@ -28,6 +28,78 @@ function harness() {
   return { background, chrome, calls };
 }
 
+test('explicit Cast takes over another browser only after its cleanup reaches idle', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' };
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async message => {
+    const result = await send(message);
+    if (message.action?.type === 'stop') {
+      await h.background.event({ ...state, generation: 2, revision: 2, phase: 'switching' });
+      setTimeout(() => { void h.background.event({ ...state, generation: 2, revision: 3 }); }, 10);
+    }
+    if (message.action?.type === 'prepare-browser') assert.equal(h.background.snapshot.phase, 'idle');
+    return result;
+  };
+  await h.background.cast();
+  assert.deepEqual(h.calls.filter(c => ['grant', 'stop', 'prepare-browser', 'start-browser'].includes(c)), ['grant', 'stop', 'prepare-browser', 'start-browser']);
+});
+
+test('a competing source change cancels takeover without starting another producer', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' };
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async message => {
+    const result = await send(message);
+    if (message.action?.type === 'stop') await h.background.event({ ...state, generation: 3, revision: 3, source: 'windows' });
+    return result;
+  };
+  await assert.rejects(h.background.cast(), /capture-cancelled/);
+  assert.equal(h.calls.includes('prepare-browser'), false);
+  assert.equal(h.calls.includes('managed-start'), false);
+});
+
+test('reload from an observing browser is routed to the active browser by the server', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  await h.background.popup({command: 'reload-tab'});
+  assert.equal(h.calls.includes('reload-tab'), true);
+  assert.equal(h.calls.includes('grant'), false);
+});
+
+test('explicit browser shortcut can switch Windows playback to tab capture', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, source: 'windows', phase: 'streaming' };
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async message => {
+    const result = await send(message);
+    if (message.action?.type === 'select-source') await h.background.event({ ...state, generation: 2, revision: 2 });
+    return result;
+  };
+  await h.background.cast();
+  assert.deepEqual(h.calls.filter(c => ['grant', 'select-source', 'prepare-browser', 'start-browser'].includes(c)), ['grant', 'select-source', 'prepare-browser', 'start-browser']);
+});
+
+test('observing another browser after reconnect never captures or stops its stream', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  await h.background.event({ ...state, phase: 'streaming', revision: 2 });
+  assert.equal(h.calls.includes('grant'), false);
+  assert.equal(h.calls.includes('stop'), false);
+  assert.equal(h.calls.includes('managed-start'), false);
+});
+
+test('observer video controls follow the active cast capability, not its foreground tab', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.videoDelaySupported = false;
+  h.background.snapshot = { ...state, phase: 'streaming', capabilities: {calibrationAvailable: true} };
+  assert.equal(h.background.publicState().videoDelaySupported, true);
+  await h.background.popup({command: 'calibrate'});
+  assert.equal(h.calls.includes('calibrate'), true);
+  h.background.videoDelaySupported = true;
+  h.background.snapshot.capabilities.calibrationAvailable = false;
+  assert.equal(h.background.publicState().videoDelaySupported, false);
+  await assert.rejects(h.background.popup({command: 'calibrate'}), /audio-only/i);
+});
+
 test('generic tab capture needs no content script, video delay, or calibration', async () => {
   const h = harness();
   const tab = { id: 42, url: 'http://127.0.0.1:58503/', status: 'complete' };
@@ -52,7 +124,7 @@ test('generic reload completes without a video adapter and never starts capture'
   h.chrome.tabs.reload = async () => h.calls.push('reload');
   await h.background.restore('a'.repeat(64), []);
   h.background.recoveryTab = { tabId: 42, origin: 'https://example.org' };
-  await h.background.reload();
+  await h.background.reload('generic-reload');
   assert.equal(h.calls.includes('reload'), true);
   assert.equal(h.calls.includes('grant'), false);
 });
@@ -134,6 +206,8 @@ test('reload from native controller completes once and never requests capture it
   h.background.sendOffscreen = async (message) => { if (message.action?.type === 'browser-action-result') result = message.action; return send(message); };
   await h.background.event({ type: 'browser-action', actionId: 'action' });
   assert.equal(h.calls.filter((call) => call === 'reload').length, 1);
+  assert.equal(h.calls.includes('stop-for-reload'), true);
+  assert.equal(h.calls.includes('stop'), false);
   assert.equal(h.calls.includes('grant'), false);
   assert.deepEqual(result, { type: 'browser-action-result', actionId: 'action', status: 'ok', code: 'invoke-extension' });
 });

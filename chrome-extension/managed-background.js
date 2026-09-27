@@ -67,7 +67,7 @@ export class ManagedBackground {
   }
   publicState() {
     const state = this.snapshot;
-    return { mode: 'managed', videoDelaySupported: this.videoDelaySupported, setupStatus: this.setupStatus, connected: this.connected, paired: this.connected && Boolean(state), plexOrigins: this.plexOrigins, phase: state?.phase ?? 'disconnected', source: state?.source ?? 'chrome', selectedRendererId: state?.rendererId ?? null, renderers: state?.renderers ?? [], volume: state?.volume ?? null, measuredDelayMs: state?.measuredDelayMs ?? 0, manualOffsetMs: state?.manualOffsetMs ?? 0, capabilities: state?.capabilities ?? {}, warning: this.warning ?? state?.errorCode, tabId: this.tabId, counters: this.counters, cleanupPending: this.lifecycle.busy || this.recoveryRunning };
+    return { mode: 'managed', videoDelaySupported: state?.source === 'chrome' && state?.phase === 'streaming' ? Boolean(state.capabilities?.calibrationAvailable) : this.videoDelaySupported, setupStatus: this.setupStatus, connected: this.connected, paired: this.connected && Boolean(state), plexOrigins: this.plexOrigins, phase: state?.phase ?? 'disconnected', source: state?.source ?? 'chrome', selectedRendererId: state?.rendererId ?? null, renderers: state?.renderers ?? [], volume: state?.volume ?? null, measuredDelayMs: state?.measuredDelayMs ?? 0, manualOffsetMs: state?.manualOffsetMs ?? 0, capabilities: state?.capabilities ?? {}, warning: this.warning ?? state?.errorCode, tabId: this.tabId, counters: this.counters, cleanupPending: this.lifecycle.busy || this.recoveryRunning };
   }
   publish() { this.onState(this.publicState()); }
   async command(action) { return this.sendOffscreen({ type: 'managed-command', action }); }
@@ -86,12 +86,12 @@ export class ManagedBackground {
       case 'stop': await this.command({ type: 'stop' }); break;
       case 'set-volume': await this.command({ type: 'set-volume', value: message.value }); break;
       case 'calibrate':
-        if (!this.videoDelaySupported) throw new Error('This tab uses audio-only capture; video calibration is unavailable');
+        if (!this.publicState().videoDelaySupported) throw new Error('This tab uses audio-only capture; video calibration is unavailable');
         await this.command({ type: 'calibrate' }); break;
       case 'set-offset':
-        if (!this.videoDelaySupported) throw new Error('This tab uses audio-only capture; video delay is unavailable');
+        if (!this.publicState().videoDelaySupported) throw new Error('This tab uses audio-only capture; video delay is unavailable');
         await this.command({ type: 'set-offset', milliseconds: message.milliseconds }); break;
-      case 'reload-tab': await this.reload(); break;
+      case 'reload-tab': await this.command({ type: 'reload-tab' }); break;
       default: throw new Error('Unknown managed command');
     }
     return this.publicState();
@@ -99,7 +99,7 @@ export class ManagedBackground {
   async cast(invokedTab) {
     if (this.recoveryRunning) throw new Error('reload-in-progress');
     return this.lifecycle.start(async (check) => {
-      if (!this.connected || !this.snapshot?.rendererId || this.snapshot.source !== 'chrome' || !['idle', 'failed'].includes(this.snapshot.phase)) throw new Error('Select Chrome and a Sonos room before casting');
+      if (!this.connected || !this.snapshot?.rendererId || this.snapshot.phase === 'switching' || Number.isInteger(this.tabId)) throw new Error('Select a Sonos room and stop this browser’s capture before casting');
       const tab = invokedTab ?? (await this.chrome.tabs.query({ active: true, currentWindow: true }))[0]; check();
       if (!Number.isInteger(tab?.id) || !isCapturableTabUrl(tab.url)) throw new Error('Open an ordinary HTTP or HTTPS web page to cast audio');
       this.videoDelaySupported = isSupportedMediaUrl(tab.url, this.plexOrigins);
@@ -111,6 +111,12 @@ export class ManagedBackground {
       await this.ensureOffscreen(); check();
       // Only this explicit popup/shortcut invocation can request the capture grant.
       const streamId = await this.chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }); check();
+      if (this.snapshot.source !== 'chrome' || ['starting', 'streaming'].includes(this.snapshot.phase)) {
+        const instanceId = this.snapshot.instanceId;
+        const generation = this.snapshot.generation + 1;
+        await this.command(this.snapshot.source === 'chrome' ? { type: 'stop' } : { type: 'select-source', source: 'chrome' }); check();
+        await this.waitForCaptureIdle(instanceId, generation, check);
+      }
       const prepared = await this.command({ type: 'prepare-browser' }); check();
       const state = prepared.state;
       this.tabId = tab.id;
@@ -127,6 +133,20 @@ export class ManagedBackground {
       } finally { if (this.pendingTab === pending) this.pendingTab = null; }
     });
   }
+  async waitForCaptureIdle(instanceId, generation, check) {
+    const deadline = Date.now() + 6500;
+    for (;;) {
+      check();
+      const state = this.snapshot;
+      if (!this.connected || !state || state.instanceId !== instanceId || state.generation > generation) throw new Error('capture-cancelled');
+      if (state.generation === generation) {
+        if (state.source === 'chrome' && state.phase === 'idle') return;
+        if (state.phase === 'failed' || (state.phase !== 'switching' && state.source !== 'chrome')) throw new Error('capture-cancelled');
+      }
+      if (Date.now() >= deadline) throw new Error('capture-cleanup-timeout');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
   async event(event) {
     if (!this.active) return;
     if (event.type === 'state') {
@@ -140,7 +160,7 @@ export class ManagedBackground {
     } else if (event.type === 'hello-ok') { this.snapshot = null; this.connected = true; this.lastBrowserStatus = ''; this.authRefreshed = false; this.setupStatus = 'connected'; this.warning = null; }
     else if (event.type === 'browser-action') {
       let status = 'ok', code = 'invoke-extension';
-      try { await this.reload(); } catch (error) {
+      try { await this.reload(event.actionId); } catch (error) {
         status = 'failed';
         const allowed = ['reload-in-progress', 'no-recovery-tab', 'select-chrome-source', 'capture-cleanup-failed', 'tab-changed', 'reload-timeout', 'control-not-ready', 'control-disconnected'];
         code = allowed.includes(error.message) ? error.message : 'reload-failed';
@@ -215,13 +235,13 @@ export class ManagedBackground {
         const recovery = await this.chrome.tabs.get(this.recoveryTab.tabId).catch(() => null);
         if (!recovery?.url || new URL(recovery.url).origin !== this.recoveryTab.origin) this.recoveryTab = null;
       }
-      const action = { type: 'browser-status', shortcut: binding.shortcut, supportedTab: isCapturableTabUrl(tab?.url), hasRecoveryTab: Boolean(this.recoveryTab) };
+      const action = { type: 'browser-status', shortcut: binding.shortcut, supportedTab: isCapturableTabUrl(tab?.url), hasRecoveryTab: Boolean(this.recoveryTab), videoSyncSupported: this.videoDelaySupported };
       const signature = JSON.stringify(action);
       if (signature !== this.lastBrowserStatus) { this.lastBrowserStatus = signature; await this.command(action); }
     } catch { this.lastBrowserStatus = ''; }
     finally { this.statusPending = false; }
   }
-  async reload() {
+  async reload(actionId) {
     if (this.recoveryRunning) throw new Error('reload-in-progress');
     if (!this.recoveryTab) throw new Error('no-recovery-tab');
     if (this.snapshot?.source !== 'chrome') throw new Error('select-chrome-source');
@@ -231,7 +251,7 @@ export class ManagedBackground {
       const result = await reloadSelectedTab({ tabId, expectedOrigin: origin, tabs: this.chrome.tabs,
         stopCapture: async () => {
           playback = await this.chrome.tabs.sendMessage(tabId, { type: 'recovery:snapshot' }).catch(() => null);
-          await this.command({ type: 'stop' });
+          await this.command({ type: 'stop-for-reload', actionId });
           const deadline = Date.now() + 5000;
           while (this.snapshot?.phase !== 'idle') {
             if (!this.connected || Date.now() >= deadline || this.snapshot?.phase === 'failed') throw new Error('capture-cleanup-failed');
@@ -254,7 +274,7 @@ export class ManagedBackground {
         },
         restorePlayback: (id, signal) => { if (signal.aborted) throw new Error('reload-timeout'); return this.chrome.tabs.sendMessage(id, { type: 'recovery:restore', playback }); },
       });
-      this.warning = 'Tab reloaded. Press Cast or the Chrome shortcut to resume.';
+      this.warning = 'Tab reloaded. Press Cast or the browser shortcut to resume.';
       return result;
     } finally { this.recoveryRunning = false; this.publish(); }
   }

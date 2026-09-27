@@ -122,6 +122,43 @@ fn authenticated_controllers_receive_the_same_live_state_without_becoming_produc
 }
 
 #[test]
+fn two_browser_sockets_receive_state_without_stealing_each_others_audio_lease() {
+    let mut fixture = Fixture::new();
+    let (mut first, first_id) = fixture.controller(true);
+    let (mut second, second_id) = fixture.controller(true);
+    assert_ne!(first_id, second_id);
+    let lease = fixture
+        .bridge
+        .leases()
+        .issue(&first_id, 2, Instant::now())
+        .unwrap();
+    fixture
+        .bridge
+        .leases()
+        .attach("instance-1", &lease, Instant::now())
+        .unwrap();
+    let mut snapshot = Session::new("instance-1".into()).snapshot().clone();
+    snapshot.revision = 7;
+    fixture.bus.publish(snapshot);
+    assert_eq!(receive(&mut first)["revision"], 7);
+    assert_eq!(receive(&mut second)["revision"], 7);
+    second.close(None).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let input = fixture
+            .inputs
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        if matches!(input, ManagedInput::Event(swyh_rs::managed::state::Event::BrowserDisconnected {owner}) if owner == second_id)
+        {
+            break;
+        }
+    }
+    assert!(fixture.bridge.leases().is_active(&lease));
+    fixture.bridge.shutdown();
+}
+
+#[test]
 fn ordinary_web_origins_and_wrong_tokens_cannot_control_playback() {
     let mut fixture = Fixture::new();
     assert!(
@@ -269,7 +306,7 @@ fn capture_release_is_only_delivered_to_its_browser_owner() {
 fn browser_lease_is_owned_single_use_expiring_and_instance_bound() {
     let leases = LeaseRegistry::new("instance-1".into());
     leases.register_browser("browser").unwrap();
-    assert_eq!(leases.register_browser("other"), Err(LeaseError::Busy));
+    leases.register_browser("other").unwrap();
     let now = Instant::now();
     assert_eq!(leases.issue("native", 2, now), Err(LeaseError::NotOwner));
     let lease = leases.issue("browser", 2, now).unwrap();
@@ -280,6 +317,9 @@ fn browser_lease_is_owned_single_use_expiring_and_instance_bound() {
     assert_eq!(grant.generation, 2);
     assert!(leases.attach("instance-1", &lease, now).is_err());
     assert_eq!(leases.issue("browser", 3, now), Err(LeaseError::Busy));
+    assert_eq!(leases.issue("other", 3, now), Err(LeaseError::Busy));
+    leases.unregister_browser("other");
+    assert!(leases.is_active(&lease));
     leases.release(&lease);
     let next = leases.issue("browser", 3, now).unwrap();
     assert_eq!(

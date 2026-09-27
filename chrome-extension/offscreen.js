@@ -46,7 +46,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
     case 'managed-command':
       operation = commandQueue.then(() => managedCommand(message.action));
-      commandQueue = operation.catch(() => {});
+      // Reload completes only after browser-action commands run through here.
+      // Preserve ordering before dispatch, but do not hold the queue on it.
+      if (message.action?.type !== 'reload-tab') commandQueue = operation.catch(() => {});
       break;
     case 'managed-start':
       if (pendingCapture) operation = Promise.reject(new Error('capture-busy'));

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use super::protocol::{
@@ -92,10 +92,29 @@ struct Transition {
     destination: Source,
 }
 
+struct BrowserStatus {
+    shortcut: String,
+    can_cast: bool,
+    can_reload: bool,
+    video_sync: bool,
+}
+impl Default for BrowserStatus {
+    fn default() -> Self {
+        Self {
+            shortcut: String::new(),
+            can_cast: false,
+            can_reload: false,
+            video_sync: true,
+        }
+    }
+}
+
 /// The sole playback authority. I/O occurs only through the returned effects.
 pub struct Session {
     snapshot: Snapshot,
     browser_owner: Option<String>,
+    browsers: BTreeMap<String, BrowserStatus>,
+    reload: Option<(String, String, u64)>,
     capture_owner: Option<String>,
     producer_lease: Option<String>,
     play_requested: bool,
@@ -124,6 +143,8 @@ impl Session {
                 capabilities: Capabilities::default(),
             },
             browser_owner: None,
+            browsers: BTreeMap::new(),
+            reload: None,
             capture_owner: None,
             producer_lease: None,
             play_requested: false,
@@ -137,6 +158,19 @@ impl Session {
     #[must_use]
     pub const fn snapshot(&self) -> &Snapshot {
         &self.snapshot
+    }
+
+    pub(crate) fn reserve_reload(&mut self, owner: String, action_id: String) {
+        self.reload = Some((owner, action_id, self.snapshot.generation));
+    }
+    pub(crate) fn finish_reload(&mut self, action_id: &str) {
+        if self
+            .reload
+            .as_ref()
+            .is_some_and(|(_, id, _)| id == action_id)
+        {
+            self.reload = None;
+        }
     }
 
     pub fn forget_controller(&mut self, connection_id: &str) {
@@ -249,9 +283,7 @@ impl Session {
     }
 
     fn require_browser(&self, caller: &Caller) -> Result<(), &'static str> {
-        if caller.role != Role::Browser
-            || self.browser_owner.as_deref() != Some(caller.connection_id.as_str())
-        {
+        if caller.role != Role::Browser || !self.browsers.contains_key(&caller.connection_id) {
             return Err("not-browser-owner");
         }
         Ok(())
@@ -299,6 +331,14 @@ impl Session {
             return Err("settings-in-progress");
         }
         match &command.action {
+            Action::PrepareBrowser
+            | Action::StartBrowser { .. }
+            | Action::StartWindows
+            | Action::ReloadTab
+                if self.reload.is_some() =>
+            {
+                Err("reload-in-progress")
+            }
             Action::PrepareSettings => {
                 if caller.role != Role::Controller {
                     return Err("controller-required");
@@ -372,6 +412,20 @@ impl Session {
                     generation: self.snapshot.generation,
                 }])
             }
+            Action::StopForReload { action_id } => {
+                self.require_browser(caller)?;
+                if !self.reload.as_ref().is_some_and(|(owner, id, generation)| {
+                    owner == &caller.connection_id
+                        && id == action_id
+                        && *generation == self.snapshot.generation
+                }) {
+                    return Err("stale-browser-action");
+                }
+                if self.snapshot.phase == Phase::Idle && self.capture_owner.is_none() {
+                    return Ok(vec![]);
+                }
+                Ok(self.stop_and_select(self.snapshot.source))
+            }
             Action::PrepareBrowser => {
                 self.require_browser(caller)?;
                 if self.snapshot.source != Source::Chrome {
@@ -381,6 +435,8 @@ impl Session {
                 self.require_renderer()?;
                 self.new_generation();
                 self.capture_owner = Some(caller.connection_id.clone());
+                self.browser_owner = Some(caller.connection_id.clone());
+                self.refresh_browser_capabilities();
                 self.snapshot.phase = Phase::Starting;
                 self.snapshot.error_code = None;
                 Ok(vec![Effect::PrepareBrowser {
@@ -429,7 +485,9 @@ impl Session {
                 }])
             }
             Action::Calibrate => {
-                if self.snapshot.source != Source::Chrome || self.snapshot.phase != Phase::Streaming
+                if self.snapshot.source != Source::Chrome
+                    || self.snapshot.phase != Phase::Streaming
+                    || !self.snapshot.capabilities.calibration_available
                 {
                     return Err("chrome-stream-required");
                 }
@@ -448,11 +506,19 @@ impl Session {
                 shortcut,
                 supported_tab,
                 has_recovery_tab,
+                video_sync_supported,
             } => {
                 self.require_browser(caller)?;
-                self.snapshot.capabilities.shortcut.clone_from(shortcut);
-                self.snapshot.capabilities.browser_can_cast = *supported_tab;
-                self.snapshot.capabilities.browser_can_reload = *has_recovery_tab;
+                self.browsers.insert(
+                    caller.connection_id.clone(),
+                    BrowserStatus {
+                        shortcut: shortcut.clone(),
+                        can_cast: *supported_tab,
+                        can_reload: *has_recovery_tab,
+                        video_sync: *video_sync_supported,
+                    },
+                );
+                self.refresh_browser_capabilities();
                 Ok(vec![])
             }
             Action::ReloadTab => {
@@ -484,6 +550,21 @@ impl Session {
             return Err("already-playing");
         }
         Ok(())
+    }
+
+    fn refresh_browser_capabilities(&mut self) {
+        let status = self
+            .browser_owner
+            .as_ref()
+            .and_then(|owner| self.browsers.get(owner));
+        self.snapshot.capabilities.browser_connected = !self.browsers.is_empty();
+        self.snapshot.capabilities.browser_can_cast = status.is_some_and(|s| s.can_cast);
+        self.snapshot.capabilities.browser_can_reload = status.is_some_and(|s| s.can_reload);
+        self.snapshot.capabilities.shortcut =
+            status.map_or_else(String::new, |s| s.shortcut.clone());
+        self.snapshot.capabilities.calibration_available = self.snapshot.source == Source::Chrome
+            && self.snapshot.phase == Phase::Streaming
+            && status.is_some_and(|s| s.video_sync);
     }
 
     fn stop_and_select(&mut self, destination: Source) -> Vec<Effect> {
@@ -527,7 +608,10 @@ impl Session {
     fn fail_playback(&mut self, code: &str) -> Vec<Effect> {
         let request_cleanup = self.transition.is_none()
             && self.capture_owner.is_some()
-            && self.capture_owner == self.browser_owner;
+            && self
+                .capture_owner
+                .as_ref()
+                .is_some_and(|owner| self.browsers.contains_key(owner));
         let generation = self.snapshot.generation;
         self.new_generation();
         self.transition = None;
@@ -571,29 +655,25 @@ impl Session {
                 }
             }
             Event::BrowserConnected { owner } => {
+                self.browsers.entry(owner.clone()).or_default();
                 if self.browser_owner.is_none() {
-                    self.browser_owner = Some(owner.clone());
-                    self.snapshot.capabilities.browser_connected = true;
-                    if self.capture_owner.is_some() {
-                        // A reconnect cannot inherit permission to capture. Ask the
-                        // newly authenticated extension to close any surviving
-                        // offscreen producer and acknowledge a fresh transition.
-                        self.capture_owner = Some(owner);
-                        effects = self.stop_and_select(self.snapshot.source);
-                    }
+                    self.browser_owner = Some(owner);
                 }
+                self.refresh_browser_capabilities();
             }
             Event::BrowserDisconnected { owner } => {
-                if self.browser_owner.as_ref() == Some(&owner) {
-                    self.browser_owner = None;
-                    self.snapshot.capabilities.browser_connected = false;
-                    self.snapshot.capabilities.browser_can_cast = false;
-                    self.snapshot.capabilities.browser_can_reload = false;
-                    self.snapshot.capabilities.shortcut.clear();
-                    if self.capture_owner.as_ref() == Some(&owner) {
-                        effects = self.fail_playback("browser-cleanup-required");
-                    }
+                self.browsers.remove(&owner);
+                if self.capture_owner.as_ref() == Some(&owner) {
+                    // The connection's producer lease is revoked by the bridge.
+                    // Retire the generation; no remaining/reconnected browser
+                    // inherits permission to capture or acknowledge its cleanup.
+                    effects = self.fail_playback("browser-cleanup-required");
+                    self.capture_owner = None;
                 }
+                if self.browser_owner.as_ref() == Some(&owner) {
+                    self.browser_owner = self.browsers.keys().next().cloned();
+                }
+                self.refresh_browser_capabilities();
             }
             Event::ProducerAttached {
                 owner,
@@ -669,9 +749,7 @@ impl Session {
                 }
             }
         }
-        if self.snapshot.phase != Phase::Streaming {
-            self.snapshot.capabilities.calibration_available = false;
-        }
+        self.refresh_browser_capabilities();
         if self.snapshot != before {
             self.bump_revision();
         }

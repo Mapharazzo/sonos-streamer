@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -26,7 +27,7 @@ struct Lease {
 }
 #[derive(Default)]
 struct RegistryState {
-    owner: Option<String>,
+    browsers: HashSet<String>,
     lease: Option<Lease>,
 }
 
@@ -46,28 +47,28 @@ impl LeaseRegistry {
 
     pub fn register_browser(&self, owner: &str) -> Result<(), LeaseError> {
         let mut state = self.state.lock().unwrap();
-        if state
-            .owner
-            .as_deref()
-            .is_some_and(|current| current != owner)
-        {
+        if !state.browsers.contains(owner) && state.browsers.len() >= 16 {
             return Err(LeaseError::Busy);
         }
-        state.owner = Some(owner.into());
+        state.browsers.insert(owner.into());
         Ok(())
     }
 
     pub fn unregister_browser(&self, owner: &str) {
         let mut state = self.state.lock().unwrap();
-        if state.owner.as_deref() == Some(owner) {
-            state.owner = None;
+        state.browsers.remove(owner);
+        if state
+            .lease
+            .as_ref()
+            .is_some_and(|lease| lease.grant.owner == owner)
+        {
             state.lease = None;
         }
     }
 
     pub fn issue(&self, owner: &str, generation: u64, now: Instant) -> Result<String, LeaseError> {
         let mut state = self.state.lock().unwrap();
-        if state.owner.as_deref() != Some(owner) {
+        if !state.browsers.contains(owner) {
             return Err(LeaseError::NotOwner);
         }
         if generation == 0 || generation > super::protocol::MAX_COUNTER {

@@ -72,16 +72,25 @@ pub enum Action {
         transition_id: String,
     },
     ReloadTab,
+    StopForReload {
+        action_id: String,
+    },
     BrowserStatus {
         shortcut: String,
         supported_tab: bool,
         has_recovery_tab: bool,
+        #[serde(default = "legacy_video_sync")]
+        video_sync_supported: bool,
     },
     BrowserActionResult {
         action_id: String,
         status: Status,
         code: String,
     },
+}
+
+const fn legacy_video_sync() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -248,6 +257,9 @@ impl Command {
                 if shortcut.len() > 64 || shortcut.chars().any(char::is_control) =>
             {
                 Err("invalid-shortcut")
+            }
+            Action::StopForReload { action_id } if !valid_id(action_id) => {
+                Err("invalid-browser-action")
             }
             Action::BrowserActionResult {
                 action_id, code, ..

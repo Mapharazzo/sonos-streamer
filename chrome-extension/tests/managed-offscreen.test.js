@@ -9,6 +9,7 @@ class Socket {
   emit(type, event) { for (const callback of this.listeners.get(type) ?? []) callback(event); }
   send(json) {
     const value = JSON.parse(json);
+    if (value.type === 'command') Socket.onCommand?.(this, value);
     if (value.type === 'hello') queueMicrotask(() => {
       if (this.url.endsWith('/control/v1')) {
         this.emit('message', { data: JSON.stringify({ type: 'hello-ok', version: 1, instanceId: 'instance', connectionId: 'browser' }) });
@@ -36,4 +37,29 @@ test('release waits for in-flight getUserMedia and ends its tracks before report
   assert.equal((await starting).ok, false); assert.equal((await stopping).ok, true); assert.equal(track.readyState, 'ended');
   const remaining = await send({ type: 'managed-state' }); assert.equal(remaining.value.connected, true); assert.equal(remaining.value.capturing, false);
   await send({ type: 'managed-close' });
+});
+
+test('a pending reload result does not block the commands needed to finish reload', async () => {
+  let listener, reloadRequest;
+  const calls = [];
+  globalThis.WebSocket = Socket;
+  globalThis.chrome = { runtime: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', getURL: path => 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' + path, onMessage: {addListener(callback) {listener = callback;}}, sendMessage: async () => {} } };
+  Socket.onCommand = (socket, command) => {
+    calls.push(command.action.type);
+    const reply = request => socket.emit('message', {data: JSON.stringify({type: 'result', requestId: request.requestId, status: 'ok', code: '', revision: 3})});
+    if (command.action.type === 'reload-tab') reloadRequest = command;
+    else { reply(command); if (command.action.type === 'browser-action-result') reply(reloadRequest); }
+  };
+  await import('../offscreen.js?reload-queue-test');
+  const send = message => new Promise(resolve => listener(message, {id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', url: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/background.js'}, resolve));
+  await send({type: 'managed-connect', token: 'a'.repeat(64)}); await new Promise(setImmediate);
+  const reload = send({type: 'managed-command', action: {type: 'reload-tab'}});
+  const stop = send({type: 'managed-command', action: {type: 'stop'}});
+  try {
+    await new Promise(setImmediate);
+    assert.deepEqual(calls, ['reload-tab', 'stop']);
+    assert.equal((await stop).ok, true);
+    assert.equal((await send({type: 'managed-command', action: {type: 'browser-action-result', actionId: 'reload', status: 'ok', code: ''}})).ok, true);
+    assert.equal((await reload).ok, true);
+  } finally { await send({type: 'managed-close'}); await Promise.allSettled([reload, stop]); Socket.onCommand = null; }
 });

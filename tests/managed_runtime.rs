@@ -474,6 +474,7 @@ fn reload_result_waits_for_matching_browser_completion_and_is_cached() {
                 shortcut: "Ctrl+Shift+8".into(),
                 supported_tab: true,
                 has_recovery_tab: true,
+                video_sync_supported: true,
             },
         },
     );
@@ -514,4 +515,134 @@ fn reload_result_waits_for_matching_browser_completion_and_is_cached() {
     assert_eq!(completed[0].0, native);
     assert_eq!(completed[0].1.code, "invoke-extension");
     assert_eq!(runtime.command(&native, request), completed[0].1);
+}
+
+#[test]
+fn reload_reservation_blocks_takeover_and_late_stop_cannot_affect_a_new_browser() {
+    use swyh_rs::managed::{events::BridgeEvent, state::Event};
+    for timeout in [false, true] {
+        let mut runtime = Runtime::new(
+            "test-instance".into(),
+            FakeBackend::default(),
+            Arc::new(AudioHub::new()),
+            Preferences {
+                source: Source::Chrome,
+                renderer_id: Some("room".into()),
+                ..Preferences::default()
+            },
+            "127.0.0.1:5901".parse().unwrap(),
+        );
+        room(&mut runtime);
+        let a = Caller {
+            connection_id: "a".into(),
+            role: Role::Browser,
+        };
+        let b = Caller {
+            connection_id: "b".into(),
+            role: Role::Browser,
+        };
+        for caller in [&a, &b] {
+            runtime
+                .leases
+                .register_browser(&caller.connection_id)
+                .unwrap();
+            runtime.event(Event::BrowserConnected {
+                owner: caller.connection_id.clone(),
+            });
+        }
+        let call =
+            |runtime: &mut Runtime<FakeBackend>, caller: &Caller, id: &str, action: Action| {
+                runtime.command(
+                    caller,
+                    Command {
+                        request_id: id.into(),
+                        instance_id: "test-instance".into(),
+                        expected_revision: runtime.snapshot().revision,
+                        action,
+                    },
+                )
+            };
+        call(
+            &mut runtime,
+            &a,
+            "status",
+            Action::BrowserStatus {
+                shortcut: "Ctrl+Shift+8".into(),
+                supported_tab: true,
+                has_recovery_tab: true,
+                video_sync_supported: true,
+            },
+        );
+        let events = runtime.bus.subscribe_for("a");
+        assert_eq!(
+            call(&mut runtime, &b, "reload", Action::ReloadTab).status,
+            Status::Ok
+        );
+        let action_id = loop {
+            if let BridgeEvent::BrowserAction { action_id } = events
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap()
+            {
+                break action_id;
+            }
+        };
+        assert_eq!(
+            call(&mut runtime, &b, "early-cast", Action::PrepareBrowser).code,
+            "reload-in-progress"
+        );
+        assert_eq!(
+            call(
+                &mut runtime,
+                &b,
+                "foreign-stop",
+                Action::StopForReload {
+                    action_id: action_id.clone()
+                }
+            )
+            .code,
+            "stale-browser-action"
+        );
+        assert_eq!(
+            call(
+                &mut runtime,
+                &a,
+                "own-stop",
+                Action::StopForReload {
+                    action_id: action_id.clone()
+                }
+            )
+            .status,
+            Status::Ok
+        );
+        if timeout {
+            runtime.tick(std::time::Instant::now() + std::time::Duration::from_secs(18));
+        } else {
+            call(
+                &mut runtime,
+                &a,
+                "done",
+                Action::BrowserActionResult {
+                    action_id: action_id.clone(),
+                    status: Status::Ok,
+                    code: "invoke-extension".into(),
+                },
+            );
+        }
+        assert_eq!(
+            call(&mut runtime, &b, "new-cast", Action::PrepareBrowser).status,
+            Status::Ok
+        );
+        let before = runtime.snapshot().clone();
+        assert_eq!(
+            call(
+                &mut runtime,
+                &a,
+                "late-stop",
+                Action::StopForReload { action_id }
+            )
+            .code,
+            "stale-browser-action"
+        );
+        assert_eq!(runtime.snapshot(), &before);
+    }
 }

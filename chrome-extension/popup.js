@@ -94,7 +94,7 @@ function render(nextState) {
   const audioOnly = state.videoDelaySupported === false;
   elements.reload.hidden = !managed;
   elements.reload.disabled = busy || !state.paired || state.cleanupPending || state.source !== 'chrome' || !state.capabilities?.browserCanReload;
-  elements.shortcut.textContent = !managed ? '' : state.capabilities?.shortcut ? `Chrome shortcut: ${state.capabilities.shortcut}` : 'Cast shortcut unassigned or unavailable. Check chrome://extensions/shortcuts.';
+  elements.shortcut.textContent = !managed ? '' : state.capabilities?.shortcut ? `Browser shortcut: ${state.capabilities.shortcut}` : 'Cast shortcut unassigned or unavailable. Check chrome://extensions/shortcuts.';
   elements.status.classList.toggle('error', Boolean(actionError || state.warning));
   elements.status.textContent = actionError || state.warning || (state.phase === 'streaming' && state.source === 'windows' ? 'Streaming Windows audio' : phaseLabel(state.phase));
   if (document.activeElement !== elements.mode) elements.mode.value = state.mode ?? 'legacy';
@@ -104,7 +104,7 @@ function render(nextState) {
   elements.volumeValue.value = state.volume == null ? '—' : `${state.volume}%`;
   if (state.volume != null && document.activeElement !== elements.volume) elements.volume.value = state.volume;
   elements.volume.disabled = busy || !state.paired || !state.selectedRendererId;
-  elements.cast.textContent = managed && state.source === 'windows' ? 'Start Windows audio' : 'Cast current tab';
+  elements.cast.textContent = managed && state.source === 'windows' ? 'Start Windows audio' : managed && state.phase === 'streaming' && state.tabId == null ? 'Cast this tab instead' : 'Cast current tab';
   renderConnection();
   renderRenderers();
   elements.measured.value = `${state.measuredDelayMs ?? 0} ms`;
@@ -120,7 +120,8 @@ function render(nextState) {
   const castActive = ['starting', 'streaming', 'calibrating', 'stopping', 'switching'].includes(state.phase);
   elements.pair.disabled = busy || castActive;
   elements.mode.disabled = busy || castActive;
-  elements.cast.disabled = busy || state.cleanupPending || !pairedWithRenderer || !['idle', 'failed'].includes(state.phase);
+  const canTakeOver = managed && state.source === 'chrome' && state.tabId == null && ['starting', 'streaming'].includes(state.phase);
+  elements.cast.disabled = busy || state.cleanupPending || !pairedWithRenderer || (!['idle', 'failed'].includes(state.phase) && !canTakeOver);
   elements.stop.disabled = busy || !state.paired || !['starting', 'streaming', 'calibrating', 'failed', 'switching'].includes(state.phase);
   elements.calibrate.disabled = busy || audioOnly || state.phase !== 'streaming' || (managed && !state.capabilities?.calibrationAvailable);
   elements.offset.disabled = audioOnly || (managed && state.source !== 'chrome');

@@ -9,13 +9,15 @@ const actions = {
   'start-browser': { leaseId: id }, stop: {}, 'set-volume': { value: (v) => integer(v, 0, 100) },
   calibrate: {}, 'set-offset': { milliseconds: (v) => integer(v, -5000, 5000) }, 'get-state': {},
   'capture-released': { transitionId: id }, 'reload-tab': {},
+  'stop-for-reload': { actionId: id },
   'browser-status': { shortcut: (v) => string(v, 64), supportedTab: boolean, hasRecoveryTab: boolean },
   'browser-action-result': { actionId: id, status: (v) => member(v, statuses), code: (v) => string(v, 128) },
 };
 export function createManagedCommand(state, requestId, action) {
   id(state?.instanceId); integer(state.revision, 1); id(requestId);
   if (!Object.hasOwn(actions, action?.type)) throw new TypeError('Unknown managed action');
-  exact(action, ['type', ...Object.keys(actions[action.type])]);
+  exact(action, ['type', ...Object.keys(actions[action.type])], action.type === 'browser-status' ? ['videoSyncSupported'] : []);
+  if (action.type === 'browser-status' && Object.hasOwn(action, 'videoSyncSupported')) boolean(action.videoSyncSupported);
   for (const [key, validate] of Object.entries(actions[action.type])) validate(action[key]);
   return { type: 'command', requestId, instanceId: state.instanceId, expectedRevision: state.revision, action: structuredClone(action) };
 }

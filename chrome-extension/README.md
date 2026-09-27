@@ -8,6 +8,16 @@ The popup connects automatically through Chrome Native Messaging. No token is sh
 
 Ordinary HTTP/HTTPS tabs can cast audio with no video-delay script or additional site permission. The popup shows **Audio only — no video delay** and disables video calibration/manual adjustment for these tabs. Sonos still buffers playback; this mode does not promise zero audio latency. YouTube and Plex retain their video-sync controls. Chrome internal pages, extension pages, local files, and the Chrome Web Store cannot be selected for this mode. Chrome may also reject capture of protected content.
 
+Multiple browsers or profiles can keep the managed extension connected at once.
+They share room, source, volume and playback state; only one audio producer plays.
+While another browser casts, **Cast this tab instead** stops its stream and waits
+for capture cleanup before starting this tab. Stop and volume work from either
+popup. Reload targets the browser that owns the active (or most recent) cast.
+Opening/reconnecting an extension never takes over playback. If a competing
+command or cleanup failure interrupts a handoff, press Cast again explicitly.
+The browser shortcut can also switch Windows audio to a tab; choosing a source
+alone still leaves it idle. Reload every installed copy after an extension update.
+
 `npm run package` produces a development ZIP and matching native-host policy. Production packaging requires `node tools/package-extension.mjs --channel production --store-key <PUBLIC_BASE64_SPKI>` with the actual distinct store public key. Public signing/store publication remains a release prerequisite.
 
 ## Standalone legacy prototype

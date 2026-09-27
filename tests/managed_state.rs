@@ -114,46 +114,123 @@ fn startup_is_idle_and_cannot_capture_without_room_and_start() {
 }
 
 #[test]
-fn reconnected_browser_must_confirm_cleanup_before_capture_can_restart() {
-    let mut session = configured(Source::Chrome);
-    session.on_event(Event::BrowserConnected {
-        owner: "old-browser".into(),
-    });
-    let prepare = command(&session, "prepare", Action::PrepareBrowser);
-    session.apply(&caller("old-browser", Role::Browser), prepare);
-    session.on_event(Event::BrowserDisconnected {
-        owner: "old-browser".into(),
-    });
-    let effects = session.on_event(Event::BrowserConnected {
-        owner: "new-browser".into(),
-    });
+fn multiple_browsers_share_controls_but_cleanup_and_reload_follow_the_capture() {
+    let (mut session, active) = active_browser();
+    let other = caller("brave", Role::Browser);
+    let before = session.snapshot().clone();
+    assert!(
+        session
+            .on_event(Event::BrowserConnected {
+                owner: other.connection_id.clone()
+            })
+            .is_empty()
+    );
+    assert_eq!(session.snapshot().generation, before.generation);
+    assert_eq!(session.snapshot().phase, before.phase);
+    for (browser, recovery) in [(&active, true), (&other, false)] {
+        let status = command(
+            &session,
+            "status",
+            Action::BrowserStatus {
+                shortcut: "Ctrl+Shift+8".into(),
+                supported_tab: true,
+                has_recovery_tab: recovery,
+                video_sync_supported: recovery,
+            },
+        );
+        assert_eq!(session.apply(browser, status).0.status, Status::Ok);
+    }
+    let reload = command(&session, "reload-other", Action::ReloadTab);
+    assert!(session.apply(&other, reload).1.iter().any(
+        |effect| matches!(effect, Effect::ReloadTab {owner,..} if owner == &active.connection_id)
+    ));
+    let stop = command(&session, "stop-other", Action::Stop);
+    let effects = session.apply(&other, stop).1;
     let transition = effects
         .iter()
         .find_map(|effect| match effect {
             Effect::ReleaseBrowser {
                 owner,
                 transition_id,
-            } if owner == "new-browser" => Some(transition_id.clone()),
+            } if owner == &active.connection_id => Some(transition_id.clone()),
             _ => None,
         })
-        .expect("request cleanup from reconnected extension");
+        .unwrap();
+    let wrong = command(
+        &session,
+        "wrong-ack",
+        Action::CaptureReleased {
+            transition_id: transition.clone(),
+        },
+    );
+    assert_eq!(session.apply(&other, wrong).0.status, Status::Rejected);
     let ack = command(
         &session,
-        "clean",
+        "owner-ack",
         Action::CaptureReleased {
             transition_id: transition,
         },
     );
+    assert_eq!(session.apply(&active, ack).0.status, Status::Ok);
+    let prepare = command(&session, "other-prepare", Action::PrepareBrowser);
+    assert_eq!(session.apply(&other, prepare).0.status, Status::Ok);
+    let generation = session.snapshot().generation;
+    assert!(
+        session
+            .on_event(Event::BrowserDisconnected {
+                owner: active.connection_id
+            })
+            .is_empty()
+    );
+    assert_eq!(session.snapshot().generation, generation);
+    assert_eq!(session.snapshot().phase, Phase::Starting);
+}
+
+#[test]
+fn reconnected_browser_does_not_inherit_capture_or_interrupt_another_browser() {
+    let (mut session, old) = active_browser();
+    let generation = session.snapshot().generation;
+    let stopped = session.on_event(Event::BrowserDisconnected {
+        owner: old.connection_id.clone(),
+    });
+    assert!(stopped.contains(&Effect::StopPlayback { generation }));
+    assert_eq!(session.snapshot().phase, Phase::Failed);
+    let effects = session.on_event(Event::BrowserConnected {
+        owner: "new-browser".into(),
+    });
+    assert!(effects.is_empty());
+    let stale = command(
+        &session,
+        "stale-start",
+        Action::StartBrowser {
+            lease_id: "lease-1".into(),
+        },
+    );
     assert_eq!(
         session
-            .apply(&caller("new-browser", Role::Browser), ack)
+            .apply(&caller("new-browser", Role::Browser), stale)
+            .0
+            .status,
+        Status::Rejected
+    );
+    let prepare = command(&session, "explicit-cast", Action::PrepareBrowser);
+    assert_eq!(
+        session
+            .apply(&caller("new-browser", Role::Browser), prepare)
             .0
             .status,
         Status::Ok
     );
-    assert_eq!(session.snapshot().phase, Phase::Idle);
+    let generation = session.snapshot().generation;
+    assert!(
+        session
+            .on_event(Event::BrowserConnected {
+                owner: old.connection_id
+            })
+            .is_empty()
+    );
+    assert_eq!(session.snapshot().generation, generation);
 }
-
 #[test]
 fn producer_loss_requests_cleanup_from_its_connected_browser() {
     let mut session = configured(Source::Chrome);
@@ -172,6 +249,48 @@ fn producer_loss_requests_cleanup_from_its_connected_browser() {
             .iter()
             .any(|effect| matches!(effect,Effect::ReleaseBrowser{owner,..} if owner=="browser"))
     );
+}
+
+#[test]
+fn video_sync_capability_follows_the_active_browser_only() {
+    let (mut session, active) = active_browser();
+    session.on_event(Event::BrowserConnected {
+        owner: "observer".into(),
+    });
+    for enabled in [false, true] {
+        for (caller, video_sync_supported) in [
+            (&active, enabled),
+            (&caller("observer", Role::Browser), !enabled),
+        ] {
+            let status = command(
+                &session,
+                &format!("video-{enabled}"),
+                Action::BrowserStatus {
+                    shortcut: String::new(),
+                    supported_tab: true,
+                    has_recovery_tab: true,
+                    video_sync_supported,
+                },
+            );
+            assert_eq!(session.apply(caller, status).0.status, Status::Ok);
+        }
+        assert_eq!(
+            session.snapshot().capabilities.calibration_available,
+            enabled
+        );
+        let calibrate = command(&session, &format!("calibrate-{enabled}"), Action::Calibrate);
+        assert_eq!(
+            session
+                .apply(&caller("observer", Role::Browser), calibrate)
+                .0
+                .status,
+            if enabled {
+                Status::Ok
+            } else {
+                Status::Rejected
+            }
+        );
+    }
 }
 
 #[test]

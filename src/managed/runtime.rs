@@ -152,6 +152,8 @@ impl<B: Backend> Runtime<B> {
                         deadline: Instant::now() + Duration::from_secs(17),
                     },
                 );
+                self.session
+                    .reserve_reload(owner.clone(), action_id.clone());
                 self.bus
                     .send_to(&owner, BridgeEvent::BrowserAction { action_id });
                 continue;
@@ -370,6 +372,7 @@ impl<B: Backend> Runtime<B> {
     }
     fn complete_browser_action(&mut self, id: &str, status: Status, code: &str) {
         if let Some(mut pending) = self.browser_actions.remove(id) {
+            self.session.finish_reload(id);
             pending.result.status = status;
             pending.result.code = code.into();
             pending.result.revision = self.snapshot().revision;
