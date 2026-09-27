@@ -54,7 +54,7 @@ toml = "1.1.2"
 tungstenite = "0.30"
 ureq = { version = "3.3.0", default-features = false, features = ["charset", "gzip"] }
 url = "2.5.8"
-wide = "1.2.0"
+wide = "1.4.0"
 xml = "1.2.1"
 
 [target.'cfg(windows)'.dependencies]
