@@ -28,7 +28,7 @@ jobs:
                 lib{xcursor,xrender,xfixes,png,gl1-mesa}-dev\
                 libglu1-mesa-dev libasound2-dev pkg-config
         fi
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
