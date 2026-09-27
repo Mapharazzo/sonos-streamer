@@ -74,6 +74,20 @@ test('external source switch disposes capture and delayed video before ack, with
   assert.deepEqual(h.calls, ['managed-stop', 'video-delay:stop', 'capture-released']);
   assert.equal(h.background.tabId, null);
 });
+
+test('capture stopped notification arriving before source-switch state cannot replace its destination', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' };
+  h.background.tabId = 42; h.background.videoTabId = 42; h.calls.length = 0;
+  // Chrome can report tracks stopped before the worker receives the server's
+  // Switching snapshot/release request. Its cached Streaming state is stale.
+  await h.background.tabClosedOrNavigated(42, { captureEnded: true });
+  await h.background.event({ type: 'release-capture', transitionId: 'switch-to-windows' });
+  assert.equal(h.calls.includes('stop'), false);
+  assert.equal(h.calls.includes('video-delay:stop'), true);
+  assert.equal(h.calls.includes('capture-released'), true);
+  assert.equal(h.background.tabId, null);
+});
 test('failed audio disposal never acknowledges capture release', async () => {
   const h = harness(); await h.background.restore('a'.repeat(64), []);
   h.background.sendOffscreen = async (message) => { h.calls.push(message.type); if (message.type === 'managed-stop') throw new Error('cleanup-failed'); };

@@ -163,9 +163,15 @@ export class ManagedBackground {
     } else if (event.type === 'audio-stats') this.counters = event;
     this.publish();
   }
-  async tabClosedOrNavigated(tabId) {
+  async tabClosedOrNavigated(tabId, { captureEnded = false } = {}) {
     if (this.recoveryRunning) return;
     if (tabId !== this.tabId && tabId !== this.pendingTab?.id) return;
+    if (captureEnded) {
+      // Track shutdown can precede the server's source-switch state. Release
+      // local resources without replacing that transition with another Stop.
+      // An unexpected end closes the producer, which the server handles itself.
+      await this.lifecycle.release(); this.publish(); return;
+    }
     // The old document and video overlay are gone. Server Stop requests audio cleanup.
     this.videoTabId = null;
     if (!this.lifecycle.busy && this.snapshot?.source === 'chrome' && ['starting', 'streaming'].includes(this.snapshot.phase)) await this.command({ type: 'stop' }).catch(() => {});

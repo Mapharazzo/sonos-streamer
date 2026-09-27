@@ -69,7 +69,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 chrome.tabCapture.onStatusChanged.addListener((info) => {
-  if (connectionMode === 'managed') { if (['stopped', 'error'].includes(info.status)) void ready.then(() => managed.tabClosedOrNavigated(info.tabId)).catch(() => {}); return; }
+  if (connectionMode === 'managed') { if (['stopped', 'error'].includes(info.status)) void ready.then(() => managed.tabClosedOrNavigated(info.tabId, { captureEnded: true })).catch(() => {}); return; }
   if (info.tabId === session.tabId && ['stopped', 'error'].includes(info.status)) {
     void stopCapture(`capture-${info.status}`);
   }
