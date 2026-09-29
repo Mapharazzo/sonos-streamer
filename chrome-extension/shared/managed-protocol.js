@@ -8,7 +8,7 @@ const actions = {
   'select-renderer': { rendererId: id }, 'start-windows': {}, 'prepare-browser': {},
   'start-browser': { leaseId: id }, stop: {}, 'set-volume': { value: (v) => integer(v, 0, 100) },
   calibrate: {}, 'set-offset': { milliseconds: (v) => integer(v, -5000, 5000) }, 'get-state': {},
-  'capture-released': { transitionId: id }, 'reload-tab': {},
+  'capture-released': { transitionId: id }, 'reload-tab': {}, 'reclaim-speakers': {},
   'stop-for-reload': { actionId: id },
   'browser-status': { shortcut: (v) => string(v, 64), supportedTab: boolean, hasRecoveryTab: boolean },
   'browser-action-result': { actionId: id, status: (v) => member(v, statuses), code: (v) => string(v, 128) },

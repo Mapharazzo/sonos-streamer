@@ -84,6 +84,10 @@ export class ManagedBackground {
       case 'select-renderer': await this.command({ type: 'select-renderer', rendererId: message.rendererId }); break;
       case 'cast': if (this.snapshot?.source === 'windows') await this.command({ type: 'start-windows' }); else await this.cast(); break;
       case 'stop': await this.command({ type: 'stop' }); break;
+      case 'reclaim-speakers':
+        if (this.snapshot?.source === 'chrome' && ['idle', 'failed'].includes(this.snapshot.phase)) await this.cast();
+        else await this.command({ type: 'reclaim-speakers' });
+        break;
       case 'set-volume': await this.command({ type: 'set-volume', value: message.value }); break;
       case 'calibrate':
         if (!this.publicState().videoDelaySupported) throw new Error('This tab uses audio-only capture; video calibration is unavailable');

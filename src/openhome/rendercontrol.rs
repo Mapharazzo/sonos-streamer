@@ -281,6 +281,67 @@ impl StreamInfo {
     }
 }
 
+#[cfg(test)]
+mod reclaim_tests {
+    use super::*;
+
+    #[test]
+    fn speaker_uri_and_play_errors_are_reported_instead_of_success() {
+        for fail_action in ["SetAVTransportURI", "Play"] {
+            let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            let address = server.server_addr().to_ip().unwrap();
+            let worker = std::thread::spawn(move || {
+                let mut actions = Vec::new();
+                while let Some(request) = server.recv_timeout(Duration::from_millis(500)).unwrap() {
+                    let action = request
+                        .headers()
+                        .iter()
+                        .find(|h| h.field.equiv("SOAPAction"))
+                        .unwrap()
+                        .value
+                        .as_str()
+                        .to_owned();
+                    let failed = action.contains(&format!("#{fail_action}\""));
+                    actions.push(action);
+                    request
+                        .respond(
+                            tiny_http::Response::from_string("<response/>")
+                                .with_status_code(if failed { 500 } else { 200 }),
+                        )
+                        .unwrap();
+                }
+                actions
+            });
+            let mut room = Renderer::new(&ureq::Agent::new_with_defaults());
+            room.host = "127.0.0.1".into();
+            room.port = address.port();
+            room.av_control_url = "/control".into();
+            room.supported_protocols = SupportedProtocols::AVTRANSPORT;
+            let result = room.play_url(
+                "http://127.0.0.1:5901/managed/test/1/stream.wav",
+                StreamInfo {
+                    sample_rate: 48000,
+                    bits_per_sample: BitDepth::Bits16,
+                    streaming_format: StreamingFormat::Wav,
+                    server_port: 5901,
+                },
+            );
+            let actions = worker.join().unwrap();
+            assert!(
+                result.is_err(),
+                "{fail_action} failure must reach the caller"
+            );
+            if fail_action == "SetAVTransportURI" {
+                assert_eq!(
+                    actions.len(),
+                    2,
+                    "do not play the previous source after URI rejection"
+                );
+            }
+        }
+    }
+}
+
 /// An UPNP/DLNA service desciption
 #[derive(Debug, Clone)]
 pub struct AvService {
@@ -654,7 +715,7 @@ impl Renderer {
                 "urn:schemas-upnp-org:service:AVTransport:1#SetAVTransportURI",
                 &xmlbody,
             )
-            .unwrap_or_default();
+            .ok_or("speaker rejected stream URL")?;
         // the renderer will now send a head request first, so wait a bit
         std::thread::sleep(Duration::from_millis(100));
         // send play command
@@ -664,7 +725,7 @@ impl Renderer {
                 "urn:schemas-upnp-org:service:AVTransport:1#Play",
                 AV_PLAY_TEMPLATE,
             )
-            .unwrap_or_default();
+            .ok_or("speaker rejected playback")?;
         Ok(())
     }
 

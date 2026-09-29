@@ -395,6 +395,35 @@ fn active_browser() -> (Session, Caller) {
 }
 
 #[test]
+fn reclaim_browser_keeps_ownership_and_old_commands_cannot_reclaim_after_a_switch() {
+    let (mut session, browser) = active_browser();
+    let generation = session.snapshot().generation;
+    let native = caller("native", Role::Controller);
+    let retry = command(&session, "reclaim", Action::ReclaimSpeakers);
+    let (result, effects) = session.apply(&native, retry.clone());
+    assert_eq!(result.status, Status::Ok);
+    assert_eq!(effects, vec![Effect::ReclaimSpeakers { generation }]);
+    assert!(
+        session.apply(&native, retry).1.is_empty(),
+        "duplicate retry must not issue another Play"
+    );
+    session.on_event(Event::StreamStarted { generation });
+    let stale = command(&session, "old-reclaim", Action::ReclaimSpeakers);
+    let switch = command(
+        &session,
+        "switch",
+        Action::SelectSource {
+            source: Source::Windows,
+        },
+    );
+    let (_, effects) = session.apply(&native, switch);
+    assert!(effects.iter().any(|effect| matches!(effect, Effect::ReleaseBrowser { owner, .. } if owner == &browser.connection_id)));
+    assert_eq!(session.apply(&native, stale).0.code, "stale-revision");
+    let retry = command(&session, "busy-reclaim", Action::ReclaimSpeakers);
+    assert_eq!(session.apply(&native, retry).0.code, "playback-busy");
+}
+
+#[test]
 fn calibration_applies_measurement_and_persists_cleared_manual_adjustment() {
     let (mut session, browser) = active_browser();
     let offset = command(&session, "offset", Action::SetOffset { milliseconds: 5000 });

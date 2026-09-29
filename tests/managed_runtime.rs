@@ -126,6 +126,161 @@ fn room(runtime: &mut Runtime<FakeBackend>) {
 }
 
 #[test]
+fn reclaim_reissues_play_without_reopening_capture_and_times_out_if_speaker_stays_away() {
+    let mut runtime = Runtime::new(
+        "test-instance".into(),
+        FakeBackend::default(),
+        Arc::new(AudioHub::new()),
+        Preferences {
+            source: Source::Windows,
+            renderer_id: Some("room".into()),
+            ..Preferences::default()
+        },
+        "127.0.0.1:5901".parse().unwrap(),
+    );
+    room(&mut runtime);
+    command(&mut runtime, Action::StartWindows);
+    let generation = runtime.snapshot().generation;
+    runtime.event(swyh_rs::managed::state::Event::StreamStarted { generation });
+    let reclaim: Action =
+        serde_json::from_str(r#"{"type":"reclaim-speakers"}"#).expect("reclaim action");
+    assert_eq!(command(&mut runtime, reclaim.clone()).status, Status::Ok);
+    assert_eq!(runtime.backend().opened, 1);
+    assert_eq!(runtime.backend().plays.len(), 2);
+    assert_eq!(runtime.snapshot().generation, generation);
+    assert_eq!(runtime.snapshot().phase, Phase::Starting);
+    assert_eq!(command(&mut runtime, reclaim).status, Status::Rejected);
+    runtime.tick(std::time::Instant::now() + std::time::Duration::from_secs(16));
+    assert_eq!(runtime.snapshot().phase, Phase::Failed);
+    assert_eq!(
+        runtime.snapshot().error_code.as_deref(),
+        Some("renderer-unreachable")
+    );
+}
+
+#[test]
+fn reclaim_starts_idle_windows_but_requires_an_explicit_browser_capture() {
+    for source in [Source::Windows, Source::Chrome] {
+        let mut runtime = Runtime::new(
+            "test-instance".into(),
+            FakeBackend::default(),
+            Arc::new(AudioHub::new()),
+            Preferences {
+                source,
+                renderer_id: Some("room".into()),
+                ..Preferences::default()
+            },
+            "127.0.0.1:5901".parse().unwrap(),
+        );
+        room(&mut runtime);
+        let action =
+            serde_json::from_str(r#"{"type":"reclaim-speakers"}"#).expect("reclaim action");
+        let result = command(&mut runtime, action);
+        if source == Source::Windows {
+            assert_eq!(result.status, Status::Ok);
+            assert_eq!(runtime.backend().opened, 1);
+        } else {
+            assert_eq!(result.code, "browser-capture-required");
+            assert!(runtime.backend().plays.is_empty());
+        }
+    }
+}
+
+#[test]
+fn browser_reclaim_ignores_old_connection_end_and_preserves_producer_lease() {
+    use swyh_rs::managed::{
+        state::Event,
+        streaming::{StreamEvent, StreamEventKind},
+    };
+    let audio = Arc::new(AudioHub::new());
+    let mut runtime = Runtime::new(
+        "test-instance".into(),
+        FakeBackend::default(),
+        audio.clone(),
+        Preferences {
+            source: Source::Chrome,
+            renderer_id: Some("room".into()),
+            ..Preferences::default()
+        },
+        "127.0.0.1:5901".parse().unwrap(),
+    );
+    room(&mut runtime);
+    let browser = Caller {
+        connection_id: "browser".into(),
+        role: Role::Browser,
+    };
+    runtime.leases.register_browser("browser").unwrap();
+    runtime.event(Event::BrowserConnected {
+        owner: "browser".into(),
+    });
+    let call = |runtime: &mut Runtime<FakeBackend>, action| {
+        let request = Command {
+            request_id: format!("b{}", runtime.snapshot().revision),
+            instance_id: "test-instance".into(),
+            expected_revision: runtime.snapshot().revision,
+            action,
+        };
+        runtime.command(&browser, request)
+    };
+    let lease = call(&mut runtime, Action::PrepareBrowser).lease_id.unwrap();
+    runtime
+        .leases
+        .attach("test-instance", &lease, std::time::Instant::now())
+        .unwrap();
+    let generation = runtime.snapshot().generation;
+    runtime.event(Event::ProducerAttached {
+        owner: "browser".into(),
+        generation,
+        lease_id: lease.clone(),
+    });
+    assert_eq!(
+        call(
+            &mut runtime,
+            Action::StartBrowser {
+                lease_id: lease.clone()
+            }
+        )
+        .status,
+        Status::Ok
+    );
+    let old_peer = "127.0.0.1:12345".parse().unwrap();
+    runtime.stream_event(StreamEvent {
+        generation,
+        peer: old_peer,
+        kind: StreamEventKind::Started,
+    });
+    assert_eq!(
+        command(&mut runtime, Action::ReclaimSpeakers).status,
+        Status::Ok
+    );
+    runtime.stream_event(StreamEvent {
+        generation,
+        peer: old_peer,
+        kind: StreamEventKind::Ended,
+    });
+    runtime.tick(std::time::Instant::now() + std::time::Duration::from_secs(3));
+    assert_eq!(runtime.snapshot().phase, Phase::Starting);
+    runtime.stream_event(StreamEvent {
+        generation,
+        peer: "127.0.0.1:12346".parse().unwrap(),
+        kind: StreamEventKind::Started,
+    });
+    assert_eq!(runtime.snapshot().phase, Phase::Streaming);
+    assert_eq!(runtime.snapshot().generation, generation);
+    assert_eq!(runtime.backend().opened, 0);
+    assert_eq!(runtime.backend().stopped, 0);
+    assert!(audio.sink(generation).is_ok());
+    assert!(runtime.leases.is_active(&lease));
+    assert!(
+        runtime
+            .leases
+            .issue("browser", generation + 1, std::time::Instant::now())
+            .is_err(),
+        "the existing producer lease must remain reserved"
+    );
+}
+
+#[test]
 fn selected_and_restored_room_volume_is_queried_without_a_volume_write() {
     for restored in [false, true] {
         let mut runtime = Runtime::new(
@@ -428,6 +583,41 @@ fn fake_renderer_fetches_real_pcm_and_stop_retires_its_url() {
     let mut pcm = [0; 4];
     socket.read_exact(&mut pcm).unwrap();
     assert_eq!(pcm, [0, 64, 0, 192]);
+    // Simulate the renderer changing source, then explicitly taking it back.
+    drop(socket);
+    assert_eq!(
+        command(&mut runtime, Action::ReclaimSpeakers).status,
+        Status::Ok
+    );
+    assert_eq!(runtime.backend().opened, 1);
+    let mut resumed = TcpStream::connect(http.local_addr()).unwrap();
+    resumed
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    write!(
+        resumed,
+        "GET {} HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        url.path()
+    )
+    .unwrap();
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        resumed.read_exact(&mut byte).unwrap();
+        headers.push(byte[0]);
+    }
+    resumed.read_exact(&mut wav).unwrap();
+    audio
+        .sink(generation)
+        .unwrap()
+        .publish(Arc::new(vec![0.5, -0.5]))
+        .unwrap();
+    resumed.read_exact(&mut pcm).unwrap();
+    assert_eq!(
+        pcm,
+        [0, 64, 0, 192],
+        "reclaimed renderer receives the original capture's PCM"
+    );
     command(&mut runtime, Action::Stop);
     assert!(audio.sink(generation).is_err());
     let mut stale = TcpStream::connect(http.local_addr()).unwrap();

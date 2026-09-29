@@ -28,6 +28,22 @@ function harness() {
   return { background, chrome, calls };
 }
 
+test('take back speakers reuses a live capture without requesting another tab grant', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' }; h.background.tabId = 42;
+  await h.background.popup({ command: 'reclaim-speakers' });
+  assert.equal(h.calls.includes('reclaim-speakers'), true);
+  assert.equal(h.calls.includes('grant'), false);
+  assert.equal(h.calls.includes('stop'), false);
+});
+
+test('take back speakers from an ended browser session requests capture explicitly', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  await h.background.popup({ command: 'reclaim-speakers' });
+  assert.equal(h.calls.includes('grant'), true);
+  assert.equal(h.calls.includes('start-browser'), true);
+});
+
 test('explicit Cast takes over another browser only after its cleanup reaches idle', async () => {
   const h = harness(); await h.background.restore('a'.repeat(64), []);
   h.background.snapshot = { ...state, phase: 'streaming' };

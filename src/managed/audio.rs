@@ -148,6 +148,9 @@ pub struct GenerationSink {
 }
 
 impl GenerationSink {
+    pub fn format(&self) -> WavData {
+        self.active.format
+    }
     pub fn publish(&self, samples: AudioSamples) -> Result<(), AudioError> {
         if self.active.retired.load(Ordering::Acquire) {
             return Err(AudioError::Retired);

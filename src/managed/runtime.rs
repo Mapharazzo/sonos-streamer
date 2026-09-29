@@ -226,6 +226,16 @@ impl<B: Backend> Runtime<B> {
     }
     fn execute(&mut self, effect: Effect, result: &mut CommandResult) -> Result<(), &'static str> {
         match effect {
+            Effect::ReclaimSpeakers { generation } => {
+                let format = self
+                    .audio
+                    .sink(generation)
+                    .map_err(|_| "capture-unavailable")?
+                    .format();
+                self.renderer_connections.clear();
+                self.renderer_lost_at = None;
+                self.start_play(generation, format.sample_rate)?;
+            }
             Effect::StopPlayback { generation } => {
                 self.renderer_connections.clear();
                 self.renderer_lost_at = None;

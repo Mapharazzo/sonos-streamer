@@ -17,6 +17,7 @@ const elements = {
   renderer: document.querySelector('#renderer'),
   cast: document.querySelector('#cast'),
   stop: document.querySelector('#stop'),
+  reclaim: document.querySelector('#reclaim'),
   packets: document.querySelector('#packets'),
   measured: document.querySelector('#measured'),
   videoDelay: document.querySelector('#video-delay'),
@@ -41,6 +42,7 @@ elements.renderer.addEventListener('change', () => {
 });
 elements.cast.addEventListener('click', () => runCommand('cast'));
 elements.stop.addEventListener('click', () => runCommand('stop'));
+elements.reclaim.addEventListener('click', () => runCommand('reclaim-speakers'));
 elements.reload.addEventListener('click', () => runCommand('reload-tab'));
 elements.calibrate.addEventListener('click', () => runCommand('calibrate'));
 elements.applyOffset.addEventListener('click', () => {
@@ -117,6 +119,8 @@ function render(nextState) {
   if (document.activeElement !== elements.offset) elements.offset.value = state.manualOffsetMs ?? 0;
 
   const pairedWithRenderer = state.connected && state.paired && Boolean(state.selectedRendererId);
+  elements.reclaim.hidden = !managed;
+  elements.reclaim.disabled = busy || !managed || !pairedWithRenderer || state.cleanupPending || !['idle', 'failed', 'streaming'].includes(state.phase) || !state.renderers?.some(room => room.id === state.selectedRendererId);
   const castActive = ['starting', 'streaming', 'calibrating', 'stopping', 'switching'].includes(state.phase);
   elements.pair.disabled = busy || castActive;
   elements.mode.disabled = busy || castActive;

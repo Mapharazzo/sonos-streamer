@@ -12,6 +12,9 @@ const MAX_CONTROLLERS: usize = 16;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Effect {
+    ReclaimSpeakers {
+        generation: u64,
+    },
     StopPlayback {
         generation: u64,
     },
@@ -334,6 +337,7 @@ impl Session {
             Action::PrepareBrowser
             | Action::StartBrowser { .. }
             | Action::StartWindows
+            | Action::ReclaimSpeakers
             | Action::ReloadTab
                 if self.reload.is_some() =>
             {
@@ -362,6 +366,25 @@ impl Session {
                 Ok(vec![])
             }
             Action::GetState => Ok(vec![]),
+            Action::ReclaimSpeakers => {
+                self.require_renderer()?;
+                if self.snapshot.phase == Phase::Streaming {
+                    self.snapshot.phase = Phase::Starting;
+                    self.snapshot.error_code = None;
+                    Ok(vec![Effect::ReclaimSpeakers {
+                        generation: self.snapshot.generation,
+                    }])
+                } else if matches!(self.snapshot.phase, Phase::Idle | Phase::Failed) {
+                    if self.snapshot.source != Source::Windows {
+                        return Err("browser-capture-required");
+                    }
+                    let mut start = command.clone();
+                    start.action = Action::StartWindows;
+                    self.dispatch(caller, &start)
+                } else {
+                    Err("playback-busy")
+                }
+            }
             Action::SelectRenderer { renderer_id } => {
                 if !matches!(self.snapshot.phase, Phase::Idle | Phase::Failed)
                     || self.capture_owner.is_some()

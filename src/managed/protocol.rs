@@ -53,6 +53,7 @@ pub enum Action {
         renderer_id: String,
     },
     StartWindows,
+    ReclaimSpeakers,
     PrepareBrowser,
     StartBrowser {
         lease_id: String,
