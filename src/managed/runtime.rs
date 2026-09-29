@@ -68,6 +68,7 @@ pub struct Runtime<B: Backend> {
     renderer_lost_at: Option<Instant>,
     browser_actions: std::collections::HashMap<String, PendingBrowserAction>,
     browser_results: Vec<(Caller, CommandResult)>,
+    discovery_refresh: Option<Sender<()>>,
 }
 impl<B: Backend> Runtime<B> {
     pub fn new(
@@ -97,6 +98,7 @@ impl<B: Backend> Runtime<B> {
             renderer_lost_at: None,
             browser_actions: Default::default(),
             browser_results: vec![],
+            discovery_refresh: None,
         }
     }
     pub fn snapshot(&self) -> &Snapshot {
@@ -226,6 +228,11 @@ impl<B: Backend> Runtime<B> {
     }
     fn execute(&mut self, effect: Effect, result: &mut CommandResult) -> Result<(), &'static str> {
         match effect {
+            Effect::RefreshRooms => {
+                if let Some(refresh) = &self.discovery_refresh {
+                    let _ = refresh.try_send(());
+                }
+            }
             Effect::ReclaimSpeakers { generation } => {
                 let format = self
                     .audio
@@ -595,10 +602,13 @@ pub fn run_until(path: &Path, shutdown: Arc<AtomicBool>) -> io::Result<()> {
     )?;
     runtime.leases = bridge.leases();
     let (discovery_tx, discovery_rx) = bounded(1);
+    let (refresh_tx, refresh_rx) = bounded(1);
+    runtime.discovery_refresh = Some(refresh_tx);
     let discover_stop = Arc::new(AtomicBool::new(false));
     let worker_stop = discover_stop.clone();
     let interface = config.interface_address;
-    let worker = std::thread::spawn(move || discover_loop(interface, worker_stop, discovery_tx));
+    let worker =
+        std::thread::spawn(move || discover_loop(interface, worker_stop, discovery_tx, refresh_rx));
     println!(
         "Managed Sonos ready (idle); protocol=1 control={}",
         bridge.local_addr()
@@ -715,6 +725,7 @@ fn discover_loop(
     interface: Option<std::net::IpAddr>,
     stop: Arc<AtomicBool>,
     sender: Sender<Vec<Renderer>>,
+    refresh: crossbeam_channel::Receiver<()>,
 ) {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(2)))
@@ -727,11 +738,37 @@ fn discover_loop(
         {
             let _ = sender.try_send(rooms);
         }
-        for _ in 0..100 {
-            if stop.load(Ordering::Acquire) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(100));
+        if !wait_for_discovery(&stop, &refresh) {
+            return;
         }
+    }
+}
+
+fn wait_for_discovery(stop: &AtomicBool, refresh: &crossbeam_channel::Receiver<()>) -> bool {
+    for _ in 0..100 {
+        if stop.load(Ordering::Acquire) {
+            return false;
+        }
+        if refresh.recv_timeout(Duration::from_millis(100)).is_ok() {
+            return true;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+    #[test]
+    fn explicit_refresh_wakes_scan_backoff_and_shutdown_still_wins() {
+        let (send, receive) = bounded(1);
+        let stop = AtomicBool::new(false);
+        send.try_send(()).unwrap();
+        let before = Instant::now();
+        assert!(wait_for_discovery(&stop, &receive));
+        assert!(before.elapsed() < Duration::from_secs(1));
+        send.try_send(()).unwrap();
+        stop.store(true, Ordering::Release);
+        assert!(!wait_for_discovery(&stop, &receive));
     }
 }

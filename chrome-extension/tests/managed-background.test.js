@@ -44,6 +44,97 @@ test('take back speakers from an ended browser session requests capture explicit
   assert.equal(h.calls.includes('start-browser'), true);
 });
 
+test('Cast switches tabs in one browser after old audio/video cleanup and rejects a competing click', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' }; h.background.tabId = 7; h.background.videoTabId = 7;
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async message => {
+    const result = await send(message);
+    if (message.action?.type === 'stop') {
+      await h.background.event({ ...state, phase: 'switching', generation: 2, revision: 2 });
+      await h.background.event({ type: 'release-capture', transitionId: 'switch-2' });
+      await h.background.event({ ...state, generation: 2, revision: 3 });
+    }
+    if (message.type === 'managed-start') assert.equal(message.tabId, 42);
+    return result;
+  };
+  const first = h.background.cast();
+  await assert.rejects(h.background.cast(), /capture-busy/);
+  await first;
+  const important = h.calls.filter(c => ['stop', 'managed-stop', 'video-delay:stop', 'capture-released', 'grant', 'prepare-browser', 'managed-start', 'start-browser'].includes(c));
+  assert.deepEqual(important, ['stop', 'managed-stop', 'video-delay:stop', 'capture-released', 'grant', 'prepare-browser', 'managed-start', 'start-browser']);
+});
+
+test('Cast on the already captured tab explicitly reclaims speakers from an external source', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' }; h.background.tabId = 42;
+  await h.background.cast();
+  assert.equal(h.calls.includes('reclaim-speakers'), true);
+  assert.equal(h.calls.includes('grant'), false);
+});
+
+test('new source during same-browser handoff prevents the target tab from capturing', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' }; h.background.tabId = 7;
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async message => {
+    const result = await send(message);
+    if (message.action?.type === 'stop') await h.background.event({ ...state, source: 'windows', generation: 3, revision: 3 });
+    return result;
+  };
+  await assert.rejects(h.background.cast(), /capture-cancelled/);
+  assert.equal(h.calls.includes('grant'), false);
+  assert.equal(h.calls.includes('start-browser'), false);
+});
+
+test('source changing while the target tab is resolved cannot be stopped by an old Cast click', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' }; h.background.tabId = 7;
+  h.chrome.tabs.query = async () => {
+    await h.background.event({ ...state, source: 'windows', generation: 3, revision: 3 });
+    return [{ id: 42, url: 'https://www.youtube.com/watch?v=test' }];
+  };
+  await assert.rejects(h.background.cast(), /capture-cancelled/);
+  assert.equal(h.calls.includes('stop'), false);
+  assert.equal(h.calls.includes('grant'), false);
+});
+
+test('navigating the new tab during same-browser cleanup cancels capture', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' }; h.background.tabId = 7; h.background.videoTabId = 7;
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async message => {
+    const result = await send(message);
+    if (message.action?.type === 'stop') {
+      await h.background.event({ ...state, phase: 'switching', generation: 2, revision: 2 });
+      await h.background.tabClosedOrNavigated(42);
+    }
+    return result;
+  };
+  await assert.rejects(h.background.cast(), /capture-cancelled/);
+  assert.equal(h.calls.includes('grant'), false);
+  assert.equal(h.calls.includes('video-delay:stop'), true, 'the old tab overlay must be removed');
+});
+
+test('source changing after handoff but before the new grant cancels admission', async () => {
+  const h = harness(); await h.background.restore('a'.repeat(64), []);
+  h.background.snapshot = { ...state, phase: 'streaming' }; h.background.tabId = 7;
+  const send = h.background.sendOffscreen;
+  h.background.sendOffscreen = async message => {
+    const result = await send(message);
+    if (message.action?.type === 'stop') {
+      await h.background.event({ ...state, phase: 'switching', generation: 2, revision: 2 });
+      await h.background.event({ type: 'release-capture', transitionId: 'switch-2' });
+      await h.background.event({ ...state, generation: 2, revision: 3 });
+    }
+    return result;
+  };
+  h.chrome.storage.session = { set: async () => { await h.background.event({ ...state, source: 'windows', phase: 'streaming', generation: 3, revision: 4 }); } };
+  await assert.rejects(h.background.cast(), /capture-cancelled/);
+  assert.equal(h.calls.includes('grant'), false);
+  assert.equal(h.calls.includes('select-source'), false);
+});
+
 test('explicit Cast takes over another browser only after its cleanup reaches idle', async () => {
   const h = harness(); await h.background.restore('a'.repeat(64), []);
   h.background.snapshot = { ...state, phase: 'streaming' };

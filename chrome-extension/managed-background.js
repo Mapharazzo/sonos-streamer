@@ -70,7 +70,11 @@ export class ManagedBackground {
     return { mode: 'managed', videoDelaySupported: state?.source === 'chrome' && state?.phase === 'streaming' ? Boolean(state.capabilities?.calibrationAvailable) : this.videoDelaySupported, setupStatus: this.setupStatus, connected: this.connected, paired: this.connected && Boolean(state), plexOrigins: this.plexOrigins, phase: state?.phase ?? 'disconnected', source: state?.source ?? 'chrome', selectedRendererId: state?.rendererId ?? null, renderers: state?.renderers ?? [], volume: state?.volume ?? null, measuredDelayMs: state?.measuredDelayMs ?? 0, manualOffsetMs: state?.manualOffsetMs ?? 0, capabilities: state?.capabilities ?? {}, warning: this.warning ?? state?.errorCode, tabId: this.tabId, counters: this.counters, cleanupPending: this.lifecycle.busy || this.recoveryRunning };
   }
   publish() { this.onState(this.publicState()); }
-  async command(action) { return this.sendOffscreen({ type: 'managed-command', action }); }
+  async command(action, expectedState) {
+    const message = { type: 'managed-command', action };
+    if (expectedState) message.expectedState = { instanceId: expectedState.instanceId, generation: expectedState.generation, source: expectedState.source };
+    return this.sendOffscreen(message);
+  }
   async popup(message) {
     if (message.type === 'state-request') { await this.refreshBrowserStatus(); return this.publicState(); }
     this.warning = null;
@@ -102,36 +106,71 @@ export class ManagedBackground {
   }
   async cast(invokedTab) {
     if (this.recoveryRunning) throw new Error('reload-in-progress');
+    if (this.castRunning || this.lifecycle.busy) throw new Error('capture-busy');
+    this.castRunning = true;
+    try {
+      if (Number.isInteger(this.tabId)) {
+        if (!this.connected || this.snapshot?.phase !== 'streaming') throw new Error('capture-busy');
+        const previous = this.snapshot, previousTabId = this.tabId;
+        const tab = invokedTab ?? (await this.chrome.tabs.query({ active: true, currentWindow: true }))[0];
+        if (!this.connected || this.snapshot?.instanceId !== previous.instanceId || this.snapshot?.generation !== previous.generation || this.snapshot?.phase !== 'streaming' || this.tabId !== previousTabId) throw new Error('capture-cancelled');
+        if (!Number.isInteger(tab?.id) || !isCapturableTabUrl(tab.url)) throw new Error('Open an ordinary HTTP or HTTPS web page to cast audio');
+        if (tab.id === this.tabId) { await this.command({ type: 'reclaim-speakers' }, previous); return this.publicState(); }
+        // Cleanup invalidates CaptureLifecycle.start, so complete our old capture's
+        // handoff before admitting the new one. castRunning serializes both stages.
+        const pending = { id: tab.id, url: tab.url, cancelled: false };
+        this.pendingTab = pending;
+        const instanceId = this.snapshot.instanceId, generation = this.snapshot.generation + 1;
+        const check = () => { if (pending.cancelled) throw new Error('capture-cancelled'); };
+        try {
+          await this.command({ type: 'stop' }, previous); check();
+          await this.waitForCaptureIdle(instanceId, generation, check);
+          await this.lifecycle.releaseQueue; check();
+          const current = await this.chrome.tabs.get(tab.id).catch(() => null); check();
+          if (current?.url !== tab.url) throw new Error('tab-changed');
+          await this.waitForCaptureIdle(instanceId, generation, check);
+          invokedTab = current;
+        } finally { if (this.pendingTab === pending) this.pendingTab = null; }
+      }
+      return await this.startCast(invokedTab);
+    } finally { this.castRunning = false; this.publish(); }
+  }
+  async startCast(invokedTab) {
     return this.lifecycle.start(async (check) => {
       if (!this.connected || !this.snapshot?.rendererId || this.snapshot.phase === 'switching' || Number.isInteger(this.tabId)) throw new Error('Select a Sonos room and stop this browser’s capture before casting');
-      const tab = invokedTab ?? (await this.chrome.tabs.query({ active: true, currentWindow: true }))[0]; check();
+      const admission = this.snapshot;
+      const checkAdmission = () => {
+        check();
+        if (!this.connected || this.snapshot?.instanceId !== admission.instanceId || this.snapshot?.generation !== admission.generation || this.snapshot?.source !== admission.source) throw new Error('capture-cancelled');
+      };
+      const tab = invokedTab ?? (await this.chrome.tabs.query({ active: true, currentWindow: true }))[0]; checkAdmission();
       if (!Number.isInteger(tab?.id) || !isCapturableTabUrl(tab.url)) throw new Error('Open an ordinary HTTP or HTTPS web page to cast audio');
       this.videoDelaySupported = isSupportedMediaUrl(tab.url, this.plexOrigins);
       const pending = { id: tab.id, url: tab.url };
       this.pendingTab = pending;
       try {
       this.recoveryTab = { tabId: tab.id, origin: new URL(tab.url).origin };
-      await this.chrome.storage.session?.set({ recoveryTab: this.recoveryTab }); check();
-      await this.ensureOffscreen(); check();
+      await this.chrome.storage.session?.set({ recoveryTab: this.recoveryTab }); checkAdmission();
+      await this.ensureOffscreen(); checkAdmission();
       // Only this explicit popup/shortcut invocation can request the capture grant.
-      const streamId = await this.chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }); check();
+      const streamId = await this.chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }); checkAdmission();
       if (this.snapshot.source !== 'chrome' || ['starting', 'streaming'].includes(this.snapshot.phase)) {
         const instanceId = this.snapshot.instanceId;
         const generation = this.snapshot.generation + 1;
-        await this.command(this.snapshot.source === 'chrome' ? { type: 'stop' } : { type: 'select-source', source: 'chrome' }); check();
+        await this.command(this.snapshot.source === 'chrome' ? { type: 'stop' } : { type: 'select-source', source: 'chrome' }, admission); check();
         await this.waitForCaptureIdle(instanceId, generation, check);
       }
-      const prepared = await this.command({ type: 'prepare-browser' }); check();
+      const prepared = await this.command({ type: 'prepare-browser' }, this.snapshot); check();
       const state = prepared.state;
       this.tabId = tab.id;
       try {
         const current = await this.chrome.tabs.get(tab.id).catch(() => null); check();
         if (current?.id !== tab.id || current?.url !== pending.url) throw new Error('tab-changed');
         await this.sendOffscreen({ type: 'managed-start', streamId, tabId: tab.id, leaseId: prepared.leaseId, instanceId: state.instanceId, generation: state.generation }); check();
-        await this.command({ type: 'start-browser', leaseId: prepared.leaseId }); check();
+        await this.command({ type: 'start-browser', leaseId: prepared.leaseId }, state); check();
       } catch (error) {
         // An external transition owns cleanup. Never send an old Stop into its destination.
-        check(); await this.command({ type: 'stop' }).catch(() => {}); throw error;
+        check(); await this.command({ type: 'stop' }, state).catch(() => {}); throw error;
       }
       return this.publicState();
       } finally { if (this.pendingTab === pending) this.pendingTab = null; }
@@ -190,6 +229,7 @@ export class ManagedBackground {
   async tabClosedOrNavigated(tabId, { captureEnded = false } = {}) {
     if (this.recoveryRunning) return;
     if (tabId !== this.tabId && tabId !== this.pendingTab?.id) return;
+    if (this.pendingTab?.id === tabId && !captureEnded) this.pendingTab.cancelled = true;
     if (captureEnded) {
       // Track shutdown can precede the server's source-switch state. Release
       // local resources without replacing that transition with another Stop.
@@ -197,7 +237,7 @@ export class ManagedBackground {
       await this.lifecycle.release(); this.publish(); return;
     }
     // The old document and video overlay are gone. Server Stop requests audio cleanup.
-    this.videoTabId = null;
+    if (this.videoTabId === tabId) this.videoTabId = null;
     if (!this.lifecycle.busy && this.snapshot?.source === 'chrome' && ['starting', 'streaming'].includes(this.snapshot.phase)) await this.command({ type: 'stop' }).catch(() => {});
     await this.lifecycle.release(); this.publish();
   }

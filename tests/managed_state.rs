@@ -395,6 +395,19 @@ fn active_browser() -> (Session, Caller) {
 }
 
 #[test]
+fn room_refresh_requests_discovery_without_stopping_active_capture() {
+    let (mut session, browser) = active_browser();
+    let before = session.snapshot().clone();
+    let action = serde_json::from_str(r#"{"type":"refresh-rooms"}"#).expect("refresh action");
+    let request = command(&session, "refresh", action);
+    let (result, effects) = session.apply(&browser, request);
+    assert_eq!(result.status, Status::Ok);
+    assert_eq!(format!("{effects:?}"), "[RefreshRooms]");
+    assert_eq!(session.snapshot().generation, before.generation);
+    assert_eq!(session.snapshot().phase, before.phase);
+}
+
+#[test]
 fn reclaim_browser_keeps_ownership_and_old_commands_cannot_reclaim_after_a_switch() {
     let (mut session, browser) = active_browser();
     let generation = session.snapshot().generation;

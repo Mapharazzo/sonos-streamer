@@ -45,7 +45,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       operation = Promise.resolve(managedSnapshot());
       break;
     case 'managed-command':
-      operation = commandQueue.then(() => managedCommand(message.action));
+      operation = commandQueue.then(() => managedCommand(message.action, message.expectedState));
       // Reload completes only after browser-action commands run through here.
       // Preserve ordering before dispatch, but do not hold the queue on it.
       if (message.action?.type !== 'reload-tab') commandQueue = operation.catch(() => {});
@@ -369,9 +369,10 @@ async function connectManaged(token) {
   managedClient.connect(token);
   return managedSnapshot();
 }
-async function managedCommand(action) {
+async function managedCommand(action, expectedState) {
   const state = managedState?.snapshot;
   if (!state || !managedClient.authenticated) throw new Error('control-not-ready');
+  if (expectedState && (state.instanceId !== expectedState.instanceId || state.generation !== expectedState.generation || state.source !== expectedState.source)) throw new Error('capture-cancelled');
   const result = await managedClient.send(createManagedCommand(state, crypto.randomUUID(), action));
   if (result.status !== 'ok') throw new Error(result.code || 'command-failed');
   return { ...result, state: managedState?.snapshot };

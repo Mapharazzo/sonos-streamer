@@ -286,6 +286,68 @@ mod reclaim_tests {
     use super::*;
 
     #[test]
+    fn fresh_cast_replaces_native_spotify_uri_before_playing() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut source = "x-sonos-spotify:previous-source".to_string();
+            let mut actions = Vec::new();
+            for _ in 0..3 {
+                let mut request = server
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .expect("speaker command");
+                let action = request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("SOAPAction"))
+                    .unwrap()
+                    .value
+                    .as_str()
+                    .to_owned();
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                if action.contains("#SetAVTransportURI\"") {
+                    assert!(body.contains("http://127.0.0.1:5901/managed/test/1/stream.wav"));
+                    source = "our-stream".into();
+                }
+                if action.contains("#Play\"") {
+                    assert_eq!(source, "our-stream");
+                }
+                actions.push(action);
+                request
+                    .respond(tiny_http::Response::from_string("<response/>"))
+                    .unwrap();
+            }
+            actions
+        });
+        let mut room = Renderer::new(&ureq::Agent::new_with_defaults());
+        room.host = "127.0.0.1".into();
+        room.port = address.port();
+        room.av_control_url = "/control".into();
+        room.supported_protocols = SupportedProtocols::AVTRANSPORT;
+        assert!(
+            room.play_url(
+                "http://127.0.0.1:5901/managed/test/1/stream.wav",
+                StreamInfo {
+                    sample_rate: 48000,
+                    bits_per_sample: BitDepth::Bits16,
+                    streaming_format: StreamingFormat::Wav,
+                    server_port: 5901
+                }
+            )
+            .is_ok()
+        );
+        let actions = worker.join().unwrap();
+        for (action, expected) in actions
+            .iter()
+            .zip(["#Stop\"", "#SetAVTransportURI\"", "#Play\""])
+        {
+            assert!(action.ends_with(expected));
+        }
+    }
+
+    #[test]
     fn speaker_uri_and_play_errors_are_reported_instead_of_success() {
         for fail_action in ["SetAVTransportURI", "Play"] {
             let server = tiny_http::Server::http("127.0.0.1:0").unwrap();

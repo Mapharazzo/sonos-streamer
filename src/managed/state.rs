@@ -12,6 +12,7 @@ const MAX_CONTROLLERS: usize = 16;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Effect {
+    RefreshRooms,
     ReclaimSpeakers {
         generation: u64,
     },
@@ -366,6 +367,7 @@ impl Session {
                 Ok(vec![])
             }
             Action::GetState => Ok(vec![]),
+            Action::RefreshRooms => Ok(vec![Effect::RefreshRooms]),
             Action::ReclaimSpeakers => {
                 self.require_renderer()?;
                 if self.snapshot.phase == Phase::Streaming {

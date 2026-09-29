@@ -124,7 +124,7 @@ function render(nextState) {
   const castActive = ['starting', 'streaming', 'calibrating', 'stopping', 'switching'].includes(state.phase);
   elements.pair.disabled = busy || castActive;
   elements.mode.disabled = busy || castActive;
-  const canTakeOver = managed && state.source === 'chrome' && state.tabId == null && ['starting', 'streaming'].includes(state.phase);
+  const canTakeOver = managed && state.source === 'chrome' && (state.phase === 'streaming' || (state.tabId == null && state.phase === 'starting'));
   elements.cast.disabled = busy || state.cleanupPending || !pairedWithRenderer || (!['idle', 'failed'].includes(state.phase) && !canTakeOver);
   elements.stop.disabled = busy || !state.paired || !['starting', 'streaming', 'calibrating', 'failed', 'switching'].includes(state.phase);
   elements.calibrate.disabled = busy || audioOnly || state.phase !== 'streaming' || (managed && !state.capabilities?.calibrationAvailable);

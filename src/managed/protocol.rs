@@ -67,6 +67,7 @@ pub enum Action {
         milliseconds: i32,
     },
     GetState,
+    RefreshRooms,
     PrepareSettings,
     ReleaseSettings,
     CaptureReleased {

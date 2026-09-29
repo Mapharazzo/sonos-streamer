@@ -63,3 +63,24 @@ test('a pending reload result does not block the commands needed to finish reloa
     assert.equal((await reload).ok, true);
   } finally { await send({type: 'managed-close'}); await Promise.allSettled([reload, stop]); Socket.onCommand = null; }
 });
+
+test('queued capture cleanup cannot stop a newer source before dispatch', async () => {
+  let listener, heldSocket, heldCommand;
+  const calls = [];
+  globalThis.WebSocket = Socket;
+  globalThis.chrome = { runtime: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', getURL: path => 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' + path, onMessage: {addListener(callback) {listener = callback;}}, sendMessage: async () => {} } };
+  Socket.onCommand = (socket, command) => { calls.push(command.action.type); heldSocket = socket; heldCommand = command; };
+  await import('../offscreen.js?stale-capture-queue-test');
+  const send = message => new Promise(resolve => listener(message, {id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', url: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/background.js'}, resolve));
+  await send({type: 'managed-connect', token: 'a'.repeat(64)}); await new Promise(setImmediate);
+  const held = send({type: 'managed-command', action: {type: 'get-state'}});
+  const stale = send({type: 'managed-command', action: {type: 'stop'}, expectedState: {instanceId: state.instanceId, generation: state.generation, source: state.source}});
+  try {
+    await new Promise(setImmediate);
+    heldSocket.emit('message', {data: JSON.stringify({...state, generation: 3, revision: 4, source: 'windows'})});
+    heldSocket.emit('message', {data: JSON.stringify({type: 'result', requestId: heldCommand.requestId, status: 'ok', code: '', revision: 4})});
+    assert.equal((await held).ok, true);
+    assert.equal((await stale).error, 'capture-cancelled');
+    assert.deepEqual(calls, ['get-state']);
+  } finally { await send({type: 'managed-close'}); await Promise.allSettled([held, stale]); Socket.onCommand = null; }
+});
