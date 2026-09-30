@@ -86,7 +86,7 @@ Never paste the pairing token into logs or issue reports.
 
 - One producing extension session, one captured tab, and one selected renderer at a time.
 - Video sync supports YouTube, hosted Plex, and explicitly granted self-hosted Plex. Other ordinary web tabs support audio-only capture.
-- Video capture at no more than 30 FPS and 1920×1080, with a 512 MiB estimated texture budget.
+- Video capture at no more than 60 FPS and 1920×1080, with a 512 MiB estimated queued-texture budget. Longer delays reduce queued resolution to stay within that budget. Capture follows the frame presentation clock, avoiding the former callback-timing bug that could turn 30 FPS into 15 FPS.
 - Effective video delay clamped to 0–5000 ms; budget fallback refuses scaling below 640×360.
 - No protected-video bypass, PC-wide audio capture, system audio-delay driver, native-app auto-launch, Chrome Web Store signing, or unattended background service.
 

@@ -2,7 +2,10 @@ import { TimedFrameQueue } from './frame-queue.js';
 import { chooseFramePlan } from './resource-budget.js';
 
 const MAX_DELAY_MS = 5000;
-const MAX_CAPTURE_FPS = 30;
+const MAX_CAPTURE_FPS = 60;
+const FRAME_INTERVAL_MS = 1000 / MAX_CAPTURE_FPS;
+// Allow jitter on both the initial clock sample and the current callback.
+const FRAME_CLOCK_TOLERANCE_MS = 2.5;
 const MAX_TEXTURE_BYTES = 512 * 1024 ** 2;
 
 export class WebGlDelaySurface {
@@ -18,7 +21,7 @@ export class WebGlDelaySurface {
   #sourceWidth = 0;
   #sourceHeight = 0;
   #delayMs = 0;
-  #lastCaptureAt = Number.NEGATIVE_INFINITY;
+  #nextCaptureAt = null;
   #videoCallbackId = null;
   #animationFrameId = null;
   #placementCleanup = null;
@@ -51,7 +54,7 @@ export class WebGlDelaySurface {
       zIndex: video.style.zIndex,
     };
     this.#contextLostHandler = (event) => this.#onContextLost(event);
-    this.#videoFrameHandler = (timestamp) => this.#onVideoFrame(timestamp);
+    this.#videoFrameHandler = (timestamp, metadata) => this.#onVideoFrame(timestamp, metadata);
     this.#animationFrameHandler = (timestamp) => this.#onAnimationFrame(timestamp);
   }
 
@@ -126,13 +129,18 @@ export class WebGlDelaySurface {
     this.#restoreSourceStyle();
   }
 
-  #onVideoFrame(timestamp) {
+  #onVideoFrame(timestamp, metadata) {
     this.#videoCallbackId = null;
     if (this.#disposed) return;
     try {
-      if (timestamp - this.#lastCaptureAt >= 1000 / MAX_CAPTURE_FPS) {
-        this.#captureFrame(timestamp);
-        this.#lastCaptureAt = timestamp;
+      // Callback execution jitters around vsync. Gate on the presentation clock
+      // and advance a fixed deadline: resetting to each callback can halve fps.
+      const displayAt = Number.isFinite(metadata?.expectedDisplayTime) ? metadata.expectedDisplayTime : timestamp;
+      if (this.#nextCaptureAt === null) this.#nextCaptureAt = displayAt;
+      if (displayAt + FRAME_CLOCK_TOLERANCE_MS >= this.#nextCaptureAt) {
+        this.#captureFrame(displayAt);
+        const elapsedSlots = Math.floor(Math.max(0, displayAt - this.#nextCaptureAt) / FRAME_INTERVAL_MS) + 1;
+        this.#nextCaptureAt += elapsedSlots * FRAME_INTERVAL_MS;
       }
     } catch (error) {
       this.#fail('capture-failed', publicMessage(error));
