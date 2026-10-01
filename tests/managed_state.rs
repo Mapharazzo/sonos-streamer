@@ -47,6 +47,68 @@ fn configured(source: Source) -> Session {
 }
 
 #[test]
+fn deck_cast_shortcut_must_agree_across_connected_browsers() {
+    let (mut session, chrome) = active_browser();
+    let update = command(
+        &session,
+        "chrome-shortcut",
+        Action::BrowserStatus {
+            shortcut: "Ctrl+Shift+8".into(),
+            supported_tab: true,
+            has_recovery_tab: true,
+            video_sync_supported: true,
+        },
+    );
+    assert_eq!(session.apply(&chrome, update).0.status, Status::Ok);
+    let brave = caller("brave", Role::Browser);
+    session.on_event(Event::BrowserConnected {
+        owner: brave.connection_id.clone(),
+    });
+    let update = command(
+        &session,
+        "brave-remapped",
+        Action::BrowserStatus {
+            shortcut: "Alt+Shift+K".into(),
+            supported_tab: true,
+            has_recovery_tab: true,
+            video_sync_supported: false,
+        },
+    );
+    assert_eq!(session.apply(&brave, update).0.status, Status::Ok);
+    assert!(!session.snapshot().capabilities.browser_can_cast);
+    assert!(session.snapshot().capabilities.shortcut.is_empty());
+    assert!(session.snapshot().capabilities.calibration_available);
+    let update = command(
+        &session,
+        "brave-matched",
+        Action::BrowserStatus {
+            shortcut: "Ctrl+Shift+8".into(),
+            supported_tab: true,
+            has_recovery_tab: true,
+            video_sync_supported: false,
+        },
+    );
+    assert_eq!(session.apply(&brave, update).0.status, Status::Ok);
+    assert!(session.snapshot().capabilities.browser_can_cast);
+    assert_eq!(session.snapshot().capabilities.shortcut, "Ctrl+Shift+8");
+    let update = command(
+        &session,
+        "owner-not-capturable",
+        Action::BrowserStatus {
+            shortcut: "Ctrl+Shift+8".into(),
+            supported_tab: false,
+            has_recovery_tab: true,
+            video_sync_supported: true,
+        },
+    );
+    assert_eq!(session.apply(&chrome, update).0.status, Status::Ok);
+    assert!(
+        session.snapshot().capabilities.browser_can_cast,
+        "Brave can cast even when the old owner has no capturable active tab"
+    );
+}
+
+#[test]
 fn settings_reservation_excludes_playback_even_if_controller_disconnects() {
     let mut session = configured(Source::Windows);
     let native = caller("native", Role::Controller);

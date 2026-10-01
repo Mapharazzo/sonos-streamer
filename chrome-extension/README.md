@@ -9,6 +9,10 @@ The popup connects automatically through Chrome Native Messaging. No token is sh
 Ordinary HTTP/HTTPS tabs can cast audio with no video-delay script or additional site permission. The popup shows **Audio only — no video delay** and disables video calibration/manual adjustment for these tabs. Sonos still buffers playback; this mode does not promise zero audio latency. YouTube and Plex retain their video-sync controls. Chrome internal pages, extension pages, local files, and the Chrome Web Store cannot be selected for this mode. Chrome may also reject capture of protected content.
 
 Multiple browsers or profiles can keep the managed extension connected at once.
+For Stream Deck casting in Chrome or Brave, keep the **Cast current tab** shortcut
+the same in all connected browser profiles (default **Ctrl+Shift+8**). Different
+or missing bindings disable Deck casting to avoid sending the wrong shortcut;
+the popup can still cast independently. Calibration follows the active stream.
 They share room, source, volume and playback state; only one audio producer plays.
 While another browser casts, **Cast this tab instead** stops its stream and waits
 for capture cleanup before starting this tab. Stop and volume work from either

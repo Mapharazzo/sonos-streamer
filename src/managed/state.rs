@@ -583,10 +583,15 @@ impl Session {
             .as_ref()
             .and_then(|owner| self.browsers.get(owner));
         self.snapshot.capabilities.browser_connected = !self.browsers.is_empty();
-        self.snapshot.capabilities.browser_can_cast = status.is_some_and(|s| s.can_cast);
+        // The Deck invokes a shortcut in the foreground browser. Until shortcuts
+        // are addressed per browser/profile, only advertise a shared binding.
+        let shortcut = self.browsers.values().next().map(|s| s.shortcut.as_str());
+        let shared_shortcut = shortcut
+            .filter(|key| !key.is_empty() && self.browsers.values().all(|s| s.shortcut == *key));
+        self.snapshot.capabilities.browser_can_cast =
+            shared_shortcut.is_some() && self.browsers.values().any(|s| s.can_cast);
         self.snapshot.capabilities.browser_can_reload = status.is_some_and(|s| s.can_reload);
-        self.snapshot.capabilities.shortcut =
-            status.map_or_else(String::new, |s| s.shortcut.clone());
+        self.snapshot.capabilities.shortcut = shared_shortcut.unwrap_or_default().to_owned();
         self.snapshot.capabilities.calibration_available = self.snapshot.source == Source::Chrome
             && self.snapshot.phase == Phase::Streaming
             && status.is_some_and(|s| s.video_sync);
