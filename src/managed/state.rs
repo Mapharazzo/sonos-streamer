@@ -676,7 +676,34 @@ impl Session {
             }
             Event::Renderers(mut renderers) => {
                 renderers.truncate(128);
+                let selected_name = self.snapshot.renderer_id.as_ref().and_then(|id| {
+                    self.snapshot
+                        .renderers
+                        .iter()
+                        .find(|room| &room.id == id)
+                        .map(|room| room.name.clone())
+                });
                 self.snapshot.renderers = renderers;
+                // a room that came back at another address (a new DHCP lease)
+                // keeps its selection: rooms are named uniquely in Sonos
+                if let Some(name) = selected_name
+                    && self.require_renderer().is_err()
+                    && matches!(self.snapshot.phase, Phase::Idle | Phase::Failed)
+                {
+                    let mut named = self
+                        .snapshot
+                        .renderers
+                        .iter()
+                        .filter(|room| room.name == name);
+                    if let (Some(room), None) = (named.next(), named.next()) {
+                        self.snapshot.renderer_id = Some(room.id.clone());
+                        self.snapshot.volume = None;
+                        if self.snapshot.error_code.as_deref() == Some("renderer-unavailable") {
+                            self.snapshot.error_code = None;
+                        }
+                        effects.push(Effect::PersistPreferences);
+                    }
+                }
                 if self.snapshot.renderer_id.is_some()
                     && self.require_renderer().is_err()
                     && matches!(self.snapshot.phase, Phase::Starting | Phase::Streaming)

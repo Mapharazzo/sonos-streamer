@@ -615,6 +615,7 @@ pub fn run_until(path: &Path, shutdown: Arc<AtomicBool>) -> io::Result<()> {
     );
     let mut network_check = Instant::now();
     let mut browser_replies: Vec<(Caller, String, Sender<CommandResult>)> = vec![];
+    let mut room_misses: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     while !shutdown.load(Ordering::Acquire) && bridge.is_running() {
         if let Ok(input) = input_rx.recv_timeout(Duration::from_millis(20)) {
             match input {
@@ -639,7 +640,15 @@ pub fn run_until(path: &Path, shutdown: Arc<AtomicBool>) -> io::Result<()> {
                 }
             }
         }
-        if let Ok(rooms) = discovery_rx.try_recv() {
+        if let Ok(found) = discovery_rx.try_recv() {
+            // one scan can miss a speaker; a room goes only after several misses in a row
+            let rooms = merge_rooms(
+                std::mem::take(&mut runtime.backend.rooms),
+                found,
+                |room| room.remote_addr.clone(),
+                &mut room_misses,
+                ROOM_MISS_LIMIT,
+            );
             let summaries = rooms
                 .iter()
                 .map(|room| RendererSummary {
@@ -721,6 +730,41 @@ pub fn run_until(path: &Path, shutdown: Arc<AtomicBool>) -> io::Result<()> {
     }
     Ok(())
 }
+/// Consecutive discovery scans a known room may be missing from before it is
+/// dropped: SSDP replies are lost now and then, and a 2 s description fetch can
+/// time out, so a single scan is not proof a speaker is gone.
+const ROOM_MISS_LIMIT: u32 = 3;
+
+/// Merges a discovery scan into the known rooms: every room found, plus each
+/// previously known room missed fewer than `limit` scans in a row.
+fn merge_rooms<T>(
+    previous: Vec<T>,
+    found: Vec<T>,
+    key: impl Fn(&T) -> String,
+    misses: &mut std::collections::HashMap<String, u32>,
+    limit: u32,
+) -> Vec<T> {
+    let found_keys: std::collections::HashSet<String> = found.iter().map(&key).collect();
+    for id in &found_keys {
+        misses.remove(id);
+    }
+    let mut merged = found;
+    for room in previous {
+        let id = key(&room);
+        if found_keys.contains(&id) {
+            continue;
+        }
+        let missed = misses.entry(id.clone()).or_insert(0);
+        *missed += 1;
+        if *missed < limit {
+            merged.push(room);
+        } else {
+            misses.remove(&id);
+        }
+    }
+    merged
+}
+
 fn discover_loop(
     interface: Option<std::net::IpAddr>,
     stop: Arc<AtomicBool>,
@@ -759,6 +803,41 @@ fn wait_for_discovery(stop: &AtomicBool, refresh: &crossbeam_channel::Receiver<(
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
+
+    #[test]
+    fn a_room_missing_from_one_scan_stays_until_it_misses_several() {
+        let mut misses = std::collections::HashMap::new();
+        let key = |room: &&str| room.to_string();
+        let rooms = merge_rooms(vec![], vec!["living", "office"], key, &mut misses, 3);
+        let rooms = merge_rooms(rooms, vec!["office"], key, &mut misses, 3);
+        assert!(
+            rooms.contains(&"living"),
+            "dropped after one missed scan: {rooms:?}"
+        );
+        let rooms = merge_rooms(rooms, vec!["office"], key, &mut misses, 3);
+        assert!(
+            rooms.contains(&"living"),
+            "dropped after two missed scans: {rooms:?}"
+        );
+        let rooms = merge_rooms(rooms, vec!["office"], key, &mut misses, 3);
+        assert_eq!(rooms, vec!["office"], "kept after three missed scans");
+    }
+
+    #[test]
+    fn a_room_found_again_resets_its_misses() {
+        let mut misses = std::collections::HashMap::new();
+        let key = |room: &&str| room.to_string();
+        let rooms = merge_rooms(vec!["living"], vec![], key, &mut misses, 3);
+        let rooms = merge_rooms(rooms, vec![], key, &mut misses, 3);
+        let rooms = merge_rooms(rooms, vec!["living"], key, &mut misses, 3);
+        let rooms = merge_rooms(rooms, vec![], key, &mut misses, 3);
+        let rooms = merge_rooms(rooms, vec![], key, &mut misses, 3);
+        assert_eq!(
+            rooms,
+            vec!["living"],
+            "misses were not reset when found again"
+        );
+    }
     #[test]
     fn explicit_refresh_wakes_scan_backoff_and_shutdown_still_wins() {
         let (send, receive) = bounded(1);

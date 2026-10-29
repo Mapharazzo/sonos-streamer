@@ -772,3 +772,41 @@ fn renderer_feedback_cannot_start_playback_before_browser_cast() {
     });
     assert_eq!(session.snapshot().phase, Phase::Starting);
 }
+
+fn moved_room(id: &str, name: &str) -> RendererSummary {
+    RendererSummary {
+        id: id.into(),
+        name: name.into(),
+        model: "Sonos".into(),
+        address: id.into(),
+    }
+}
+
+#[test]
+fn an_idle_room_that_moved_address_keeps_its_selection() {
+    let mut session = configured(Source::Chrome);
+    let effects = session.on_event(Event::Renderers(vec![moved_room(
+        "room-1-new-lease",
+        "Office",
+    )]));
+    assert_eq!(
+        session.snapshot().renderer_id.as_deref(),
+        Some("room-1-new-lease")
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistPreferences))
+    );
+    assert_eq!(session.snapshot().error_code, None);
+}
+
+#[test]
+fn a_moved_room_is_not_followed_when_its_name_is_ambiguous() {
+    let mut session = configured(Source::Chrome);
+    session.on_event(Event::Renderers(vec![
+        moved_room("a", "Office"),
+        moved_room("b", "Office"),
+    ]));
+    assert_eq!(session.snapshot().renderer_id.as_deref(), Some("room-1"));
+}
